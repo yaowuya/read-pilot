@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="阅读：离线书架、专注阅读、书签笔记与自己的书源。">
+  <meta name="theme-color" content="#F7F8FA">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="阅读">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <title>阅读</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #f7f8fa; }
+    #loading { min-height: 100%; display: grid; place-content: center; gap: 14px; text-align: center; color: #252932; font: 15px system-ui, sans-serif; }
+    #loading strong { font-size: 30px; font-weight: 600; letter-spacing: 5px; }
+    #loading span { color: #626976; }
+  </style>
+</head>
+<body>
+  <div id="loading" role="status"><strong>阅读</strong><span>为你翻开新的一页…</span></div>
+  <script>window.addEventListener('flutter-first-frame', () => document.getElementById('loading')?.remove());</script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

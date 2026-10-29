@@ -1,0 +1,32 @@
+# Local toolchains, downloaded archives, and build outputs
+.tooling/
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+artifacts/
+.taste-skill/inspect/
+.playwright-mcp/
+.flutter-plugins
+.flutter-plugins-dependencies
+__pycache__/
+*.py[cod]
+**/doc/api/
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/ephemeral/
+**/macos/Flutter/ephemeral/
+**/android/.gradle/
+**/android/local.properties
+**/android/key.properties
+*.jks
+*.keystore
+
+# Editor and operating-system state
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
