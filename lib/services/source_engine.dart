@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html;
@@ -9,6 +8,11 @@ import 'package:http/http.dart' as http;
 import '../domain/book.dart';
 import '../domain/book_source.dart';
 import 'source_importer.dart';
+import 'source_runtime/request_plan.dart';
+import 'source_runtime/request_planner.dart';
+import 'source_runtime/rule_interpreter.dart';
+import 'source_runtime/script_runtime.dart';
+import 'source_runtime/source_transport.dart';
 
 class SourceException implements Exception {
   const SourceException(this.message);
@@ -20,54 +24,144 @@ class SourceException implements Exception {
 class SourceEngine {
   SourceEngine({
     http.Client? client,
+    RequestPlanner? planner,
+    RuleInterpreter? interpreter,
+    SandboxedScriptRuntime? scriptRuntime,
     this.timeout = const Duration(seconds: 15),
     this.maxResponseBytes = 2 * 1024 * 1024,
-  }) : _client = client ?? http.Client();
+  }) : _planner = planner ?? const RequestPlanner(),
+       _interpreter = interpreter ?? const RuleInterpreter(),
+       _scriptRuntime = scriptRuntime ?? const SandboxedScriptRuntime(),
+       _transport = SourceTransport(
+         client: client,
+         timeout: timeout,
+         maxResponseBytes: maxResponseBytes,
+       );
 
-  static const _maxChapters = 5000;
+  static const _maxChapters = 10000;
+  static const _maxDomNodes = 50000;
+  static const _maxTocPages = 10;
+  static const _maxContentPages = 10;
 
-  final http.Client _client;
+  final RequestPlanner _planner;
+  final RuleInterpreter _interpreter;
+  final SandboxedScriptRuntime _scriptRuntime;
+  final SourceTransport _transport;
   final Duration timeout;
   final int maxResponseBytes;
 
-  void close() => _client.close();
+  void close() {
+    _transport.close();
+    unawaited(_scriptRuntime.close());
+  }
 
   Future<List<Book>> search(
     BookSource source,
     String keyword, {
     int page = 1,
+    Future<void>? abortTrigger,
   }) async {
     if (keyword.trim().isEmpty) return [];
-    final template = source.searchUrl
-        .replaceAll('{{key}}', Uri.encodeComponent(keyword.trim()))
-        .replaceAll('{{page}}', '$page')
-        .replaceAll('{{baseUrl}}', source.id);
+    if (source.searchUrl.isEmpty) {
+      throw const SourceException('缺少必填字段 searchUrl。');
+    }
+    final rules = source.searchRules;
+    _requireRules(rules, 'ruleSearch', const ['bookList', 'name', 'bookUrl']);
     final response = await _fetch(
       source,
-      Uri.parse(source.id).resolve(template),
+      source.searchUrl,
+      variables: {'key': keyword.trim(), 'page': page},
+      abortTrigger: abortTrigger,
     );
-    final root = _document(response.body).documentElement!;
-    final rules = source.searchRules;
+    return _parseBookList(
+      source,
+      response,
+      rules,
+      ruleSetName: 'ruleSearch',
+      fallbackCategory: '网络',
+    );
+  }
+
+  Future<List<Book>> explore(
+    BookSource source,
+    SourceExploreEntry entry, {
+    int page = 1,
+    Future<void>? abortTrigger,
+  }) async {
+    final rules = source.exploreRules;
+    _requireRules(rules, 'ruleExplore', const ['bookList', 'name', 'bookUrl']);
+    final response = await _fetch(
+      source,
+      entry.url,
+      variables: {'page': page},
+      abortTrigger: abortTrigger,
+    );
+    return _parseBookList(
+      source,
+      response,
+      rules,
+      ruleSetName: 'ruleExplore',
+      fallbackCategory: entry.title,
+    );
+  }
+
+  void _requireRules(
+    Map<String, String> rules,
+    String setName,
+    List<String> fields,
+  ) {
+    for (final field in fields) {
+      _requiredRule(rules, setName, field);
+    }
+  }
+
+  String _requiredRule(
+    Map<String, String> rules,
+    String setName,
+    String field,
+  ) {
+    final value = rules[field];
+    if (value == null || value.trim().isEmpty) {
+      throw SourceException('缺少必填规则 $setName.$field。');
+    }
+    return value;
+  }
+
+  List<Book> _parseBookList(
+    BookSource source,
+    _Page response,
+    Map<String, String> rules, {
+    required String ruleSetName,
+    required String fallbackCategory,
+  }) {
+    final root = _ruleRoot(response.body, rules.values);
     final books = <String, Book>{};
-    for (final element in _elements(root, rules['bookList']!)) {
-      final title = _value(element, rules['name']);
-      final url = _link(response.url, _value(element, rules['bookUrl']));
+    for (final element in _interpreter.select(
+      root,
+      _requiredRule(rules, ruleSetName, 'bookList'),
+    )) {
+      final title = _interpreter.extractFirst(element, rules['name']);
+      final url = _link(
+        response.url,
+        _interpreter.extractFirst(element, rules['bookUrl']),
+      );
       if (title.isEmpty || url == null) continue;
-      final author = _value(element, rules['author']);
+      final author = _interpreter.extractFirst(element, rules['author']);
+      final category = _interpreter.extractFirst(element, rules['kind']);
       final id = '${source.id}::$url';
       books[id] = Book(
         id: id,
         title: title,
         author: author.isEmpty ? '作者未提供' : author,
-        description: _value(element, rules['intro']),
-        category: '网络',
+        description: _interpreter.extract(element, rules['intro']),
+        category: category.isEmpty ? fallbackCategory : category,
         coverStyle: books.length % 6,
         sourceLabel: source.name,
         sourceId: source.id,
         url: url.toString(),
         coverUrl: _link(
           response.url,
-          _value(element, rules['coverUrl']),
+          _interpreter.extractFirst(element, rules['coverUrl']),
         )?.toString(),
         provenance: '来自你导入的书源 ${source.name}，请确认内容使用授权。',
         addedAt: DateTime.now(),
@@ -78,149 +172,277 @@ class SourceEngine {
 
   Future<Book> loadBook(BookSource source, Book result) async {
     if (result.url == null) throw const SourceException('这本书没有可用的详情地址。');
-    final detail = await _fetch(source, Uri.parse(result.url!));
-    final root = _document(detail.body).documentElement!;
+    final tocRules = source.tocRules;
+    _requireRules(tocRules, 'ruleToc', const [
+      'chapterList',
+      'chapterName',
+      'chapterUrl',
+    ]);
+    final detail = await _fetch(source, result.url!);
     final info = source.infoRules;
-    final tocLink = _value(root, info['tocUrl']);
+    final root = _ruleRoot(detail.body, info.values);
+    final tocLink = _interpreter.extractFirst(root, info['tocUrl']);
     final tocUri = tocLink.isEmpty ? detail.url : _link(detail.url, tocLink);
     if (tocUri == null) throw const SourceException('目录地址不是有效的 HTTP(S) 链接。');
-    final toc = tocUri == detail.url ? detail : await _fetch(source, tocUri);
-    final tocRoot = _document(toc.body).documentElement!;
     final chapters = <String, Chapter>{};
-    final tocRules = source.tocRules;
-    for (final element in _elements(tocRoot, tocRules['chapterList']!)) {
-      final title = _value(element, tocRules['chapterName']);
-      final url = _link(toc.url, _value(element, tocRules['chapterUrl']));
-      if (title.isEmpty || url == null) continue;
-      chapters[url.toString()] = Chapter(
-        id: url.toString(),
-        title: title,
-        url: url.toString(),
-      );
-      if (chapters.length > _maxChapters) {
-        throw const SourceException('目录超过 $_maxChapters 章，已停止导入，未保存截断结果。');
+    final visitedTocPages = <String>{};
+    var nextTocUri = tocUri;
+    for (var page = 0; ; page++) {
+      if (!visitedTocPages.add(nextTocUri.toString())) break;
+      if (page >= _maxTocPages) {
+        throw const SourceException('目录分页超过 $_maxTocPages 页，已停止读取。');
       }
+      final toc = nextTocUri == detail.url
+          ? detail
+          : await _fetch(source, nextTocUri.toString());
+      final tocRoot = _ruleRoot(toc.body, tocRules.values);
+      for (final element in _interpreter.select(
+        tocRoot,
+        _requiredRule(tocRules, 'ruleToc', 'chapterList'),
+      )) {
+        final title = _interpreter.extractFirst(
+          element,
+          tocRules['chapterName'],
+        );
+        final url = _link(
+          toc.url,
+          _interpreter.extractFirst(element, tocRules['chapterUrl']),
+        );
+        if (title.isEmpty || url == null) continue;
+        chapters[url.toString()] = Chapter(
+          id: url.toString(),
+          title: title,
+          url: url.toString(),
+        );
+        if (chapters.length > _maxChapters) {
+          throw const SourceException('目录超过 $_maxChapters 章，已停止导入，未保存截断结果。');
+        }
+      }
+      final nextValue = _interpreter.extractFirst(
+        tocRoot,
+        tocRules['nextTocUrl'],
+      );
+      if (nextValue.isEmpty) break;
+      final parsedNext = _link(toc.url, nextValue);
+      if (parsedNext == null) {
+        throw const SourceException('目录下一页地址不是有效的同源 HTTP(S) 链接。');
+      }
+      nextTocUri = parsedNext;
     }
     if (chapters.isEmpty) {
       throw const SourceException('没有解析到章节。请检查书源目录规则或网站是否需要登录。');
     }
-    final title = _value(root, info['name']);
-    final author = _value(root, info['author']);
-    final intro = _value(root, info['intro']);
+    final title = _interpreter.extractFirst(root, info['name']);
+    final author = _interpreter.extractFirst(root, info['author']);
+    final intro = _interpreter.extract(root, info['intro']);
     return result.copyWith(
       title: title.isEmpty ? null : title,
       author: author.isEmpty ? null : author,
       description: intro.isEmpty ? null : intro,
-      coverUrl: _link(detail.url, _value(root, info['coverUrl']))?.toString(),
+      coverUrl: _link(
+        detail.url,
+        _interpreter.extractFirst(root, info['coverUrl']),
+      )?.toString(),
       chapters: chapters.values.toList(),
     );
   }
 
   Future<Chapter> loadChapter(BookSource source, Chapter chapter) async {
     if (chapter.url == null) throw const SourceException('章节没有正文地址。');
-    final response = await _fetch(source, Uri.parse(chapter.url!));
-    final root = _document(response.body).documentElement!;
-    final rule = source.contentRules['content']!;
-    final extracted = _value(root, rule);
-    final isHtml = rule.toLowerCase().endsWith('@html');
-    final paragraphs = isHtml
-        ? _paragraphs(_fragment(extracted))
-        : extracted
-              .split(RegExp(r'\n+'))
-              .map((line) => line.trim())
-              .where((line) => line.isNotEmpty)
-              .toList();
+    final rules = source.contentRules;
+    final contentRule = _requiredRule(rules, 'ruleContent', 'content');
+    final nextRule = rules['nextContentUrl'];
+    final isHtml = contentRule.toLowerCase().endsWith('@html');
+    final paragraphs = <String>[];
+    final visited = <String>{};
+    var nextUrl = chapter.url!;
+    var resolvedTitle = '';
+
+    for (var page = 0; ; page++) {
+      if (!visited.add(nextUrl)) break;
+      if (page >= _maxContentPages) {
+        throw const SourceException('正文分页超过 $_maxContentPages 页，已停止读取。');
+      }
+      final response = await _fetch(source, nextUrl);
+      final root = _ruleRoot(response.body, rules.values);
+      final extracted = await _extractRule(root, contentRule, source: source);
+      paragraphs.addAll(
+        isHtml
+            ? _paragraphs(_fragment(extracted))
+            : extracted
+                  .split(RegExp(r'\n+'))
+                  .map((line) => line.trim())
+                  .where((line) => line.isNotEmpty),
+      );
+      if (resolvedTitle.isEmpty) {
+        resolvedTitle = await _extractRule(
+          root,
+          rules['title'],
+          source: source,
+          firstOnly: true,
+        );
+      }
+      final nextValue = await _extractRule(
+        root,
+        nextRule,
+        source: source,
+        firstOnly: true,
+      );
+      if (nextValue.isEmpty) break;
+      final nextUri = _link(response.url, nextValue);
+      if (nextUri == null) {
+        throw const SourceException('正文下一页地址不是有效的同源 HTTP(S) 链接。');
+      }
+      nextUrl = nextUri.toString();
+    }
+
     if (paragraphs.isEmpty) {
       throw const SourceException('没有解析到正文。请检查规则；不支持需要脚本或付费解锁的章节。');
     }
-    final title = _value(root, source.contentRules['title']);
     return Chapter(
       id: chapter.id,
-      title: title.isEmpty ? chapter.title : title,
+      title: resolvedTitle.isEmpty ? chapter.title : resolvedTitle,
       url: chapter.url,
       paragraphs: paragraphs,
     );
   }
 
-  Future<_Page> _fetch(BookSource source, Uri url) async {
+  Future<String> _extractRule(
+    RuleNode input,
+    String? rule, {
+    required BookSource source,
+    bool firstOnly = false,
+  }) async {
+    try {
+      return await _interpreter.extractWithScripts(
+        input,
+        rule,
+        scriptRuntime: _scriptRuntime,
+        globals: {'baseUrl': source.id},
+        firstOnly: firstOnly,
+      );
+    } on SourceScriptException catch (error) {
+      throw SourceException(error.message);
+    } on FormatException catch (error) {
+      throw SourceException(error.message);
+    }
+  }
+
+  Future<void> _throwIfCancelled(Future<void>? abortTrigger) async {
+    if (abortTrigger == null) return;
+    final cancelled = await Future.any<bool>([
+      abortTrigger.then((_) => true, onError: (_) => true),
+      Future<bool>.delayed(Duration.zero, () => false),
+    ]);
+    if (cancelled) {
+      throw const SourceTransportException(
+        SourceTransportErrorKind.cancelled,
+        '书源请求已取消。',
+      );
+    }
+  }
+
+  Future<String> _resolveRequestTemplate(
+    BookSource source,
+    String template,
+    Map<String, Object?> variables,
+  ) async {
+    final match = RegExp(
+      r'^\s*<js>([\s\S]*)</js>\s*$',
+      caseSensitive: false,
+    ).firstMatch(template);
+    if (match == null) return template;
+    final result = await _scriptRuntime.evaluate(
+      match[1]!,
+      globals: {...variables, 'baseUrl': source.id},
+    );
+    if (result is! String || result.trim().isEmpty) {
+      throw const SourceScriptException(
+        SourceScriptErrorKind.evaluation,
+        '书源请求脚本没有返回 URL。',
+      );
+    }
+    return result.trim();
+  }
+
+  Future<_Page> _fetch(
+    BookSource source,
+    String template, {
+    Map<String, Object?> variables = const {},
+    Future<void>? abortTrigger,
+  }) async {
     final declared = Uri.tryParse(source.id);
     if (declared == null ||
         !SourceImporter.isHttpUrl(declared) ||
         declared.userInfo.isNotEmpty) {
       throw const SourceException('书源声明的地址必须是无账号密码的 HTTP(S) 地址。');
     }
-    final abort = Completer<void>();
-    final timer = Timer(timeout, () {
-      if (!abort.isCompleted) abort.complete();
-    });
     try {
-      return await _request(
-        url,
-        declared.origin,
-        abort.future,
-      ).timeout(timeout);
-    } on SourceException {
-      rethrow;
-    } on TimeoutException {
-      throw const SourceException('书源响应超时，请稍后重试。离线书籍仍可阅读。');
-    } on http.RequestAbortedException {
-      throw const SourceException('书源响应超时，请稍后重试。');
+      await _throwIfCancelled(abortTrigger);
+      final resolvedTemplate = await _resolveRequestTemplate(
+        source,
+        template,
+        variables,
+      );
+      final plan = _planner.plan(
+        source,
+        resolvedTemplate,
+        variables: variables,
+      );
+      final response = await _transport.execute(
+        plan,
+        policy: SourceNetworkPolicy(allowedOrigins: {declared.origin}),
+        abortTrigger: abortTrigger,
+      );
+      return _Page(response.finalUri, response.text);
+    } on SourceScriptException catch (error) {
+      throw SourceException(error.message);
+    } on SourceRuntimeException catch (error) {
+      throw SourceException(error.message);
+    } on SourceTransportException catch (error) {
+      throw SourceException(switch (error.kind) {
+        SourceTransportErrorKind.timeout => '书源响应超时，请稍后重试。离线书籍仍可阅读。',
+        SourceTransportErrorKind.invalidEncoding => '书源返回的正文不是 UTF-8，请更换来源。',
+        SourceTransportErrorKind.network =>
+          '无法连接书源。请检查网络；Web 版还需要来源允许跨域访问（CORS）。',
+        _ => error.message,
+      });
     } on FormatException {
-      throw const SourceException('书源返回的正文不是 UTF-8，请更换来源。');
-    } catch (_) {
-      throw const SourceException('无法连接书源。请检查网络；Web 版还需要来源允许跨域访问（CORS）。');
-    } finally {
-      timer.cancel();
-      if (!abort.isCompleted) abort.complete();
+      throw const SourceException('书源请求地址或选项格式无效。');
     }
   }
 
-  Future<_Page> _request(
-    Uri url,
-    String declaredOrigin,
-    Future<void> abort,
-  ) async {
-    for (var redirects = 0; redirects <= 4; redirects++) {
-      if (!SourceImporter.isHttpUrl(url) || url.userInfo.isNotEmpty) {
-        throw const SourceException('只允许无账号密码的 HTTP(S) 地址。');
+  RuleNode _ruleRoot(String content, Iterable<String> rules) {
+    if (rules.any(_interpreter.isJsonRule)) {
+      try {
+        final decoded = jsonDecode(content);
+        _checkJsonTree(decoded);
+        return RuleNode.json(decoded);
+      } on FormatException {
+        throw const SourceException('书源返回的内容不是有效的 JSON。');
       }
-      if (url.origin != declaredOrigin) {
-        throw const SourceException('书源请求超出声明的来源，已阻止跨源访问。');
-      }
-      final request = http.AbortableRequest('GET', url, abortTrigger: abort)
-        ..followRedirects = false;
-      final response = await _client.send(request);
-      if ([301, 302, 303, 307, 308].contains(response.statusCode)) {
-        await response.stream.listen((_) {}).cancel();
-        final location = response.headers['location'];
-        if (location == null || redirects == 4) {
-          throw const SourceException('书源重定向无效或次数过多。');
-        }
-        url = url.resolve(location);
-        continue;
-      }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        await response.stream.listen((_) {}).cancel();
-        throw SourceException('书源返回 HTTP ${response.statusCode}，请检查地址或稍后重试。');
-      }
-      final charset = RegExp(r'charset\s*=\s*([^;\s]+)', caseSensitive: false)
-          .firstMatch(response.headers['content-type'] ?? '')?[1]
-          ?.replaceAll('"', '')
-          .toLowerCase();
-      if (charset != null && !{'utf-8', 'utf8', 'us-ascii'}.contains(charset)) {
-        await response.stream.listen((_) {}).cancel();
-        throw SourceException('首版仅支持 UTF-8，书源使用了 $charset。');
-      }
-      final bytes = BytesBuilder(copy: false);
-      await for (final chunk in response.stream) {
-        if (bytes.length + chunk.length > maxResponseBytes) {
-          throw const SourceException('书源响应超过 2 MiB 限制，已停止下载。');
-        }
-        bytes.add(chunk);
-      }
-      return _Page(url, utf8.decode(bytes.takeBytes()));
     }
-    throw const SourceException('书源重定向次数过多。');
+    return RuleNode.html(_document(content).documentElement!);
+  }
+
+  void _checkJsonTree(Object? root) {
+    final pending = <(Object?, int)>[(root, 0)];
+    var visited = 0;
+    while (pending.isNotEmpty) {
+      final (value, depth) = pending.removeLast();
+      if (++visited > 25000 || depth > 128) {
+        throw const FormatException('JSON 结构过深或节点过多。');
+      }
+      if (value is Map) {
+        for (final child in value.values) {
+          pending.add((child, depth + 1));
+        }
+      } else if (value is List) {
+        for (final child in value) {
+          pending.add((child, depth + 1));
+        }
+      }
+    }
   }
 
   dom.Document _document(String content) {
@@ -239,7 +461,8 @@ class SourceEngine {
 
   void _checkMarkup(String content) {
     if (content.length > maxResponseBytes ||
-        RegExp(r'<[a-zA-Z]').allMatches(content).take(25001).length > 25000) {
+        RegExp(r'<[a-zA-Z]').allMatches(content).take(_maxDomNodes + 1).length >
+            _maxDomNodes) {
       throw const SourceException('书源页面结构过大，已停止解析。');
     }
   }
@@ -249,68 +472,13 @@ class SourceEngine {
     var visited = 0;
     while (pending.isNotEmpty) {
       final (node, depth) = pending.removeLast();
-      if (++visited > 25000 || depth > 128) {
+      if (++visited > _maxDomNodes || depth > 128) {
         throw const SourceException('书源页面结构过深或节点过多，已停止解析。');
       }
       for (final child in node.nodes) {
         pending.add((child, depth + 1));
       }
     }
-  }
-
-  List<dom.Element> _elements(dom.Element root, String rule) {
-    final selector = rule
-        .replaceFirst(RegExp(r'^@css:', caseSensitive: false), '')
-        .trim();
-    return selector.isEmpty ? [root] : root.querySelectorAll(selector);
-  }
-
-  String _value(dom.Element root, String? rule) {
-    if (rule == null || rule.isEmpty) return '';
-    var selector = rule.replaceFirst(
-      RegExp(r'^@css:', caseSensitive: false),
-      '',
-    );
-    final index = selector.lastIndexOf('@');
-    final accessor = index < 0 ? 'text' : selector.substring(index + 1);
-    if (index >= 0) selector = selector.substring(0, index);
-    final elements = selector.trim().isEmpty
-        ? [root]
-        : root.querySelectorAll(selector);
-    final values = elements
-        .map((element) {
-          final clean = element.clone(true);
-          for (final node in clean.querySelectorAll('script, style')) {
-            node.remove();
-          }
-          return switch (accessor) {
-            'text' => clean.text.trim(),
-            'ownText' =>
-              clean.nodes
-                  .whereType<dom.Text>()
-                  .map((node) => node.data)
-                  .join(' ')
-                  .trim(),
-            'textNodes' =>
-              clean.nodes
-                  .whereType<dom.Text>()
-                  .map((node) => node.data.trim())
-                  .where((s) => s.isNotEmpty)
-                  .join('\n'),
-            'html' => clean.outerHtml,
-            _ => clean.attributes[accessor]?.trim() ?? '',
-          };
-        })
-        .where((value) => value.isNotEmpty);
-    final output = StringBuffer();
-    for (final value in values) {
-      if (output.length + value.length > maxResponseBytes) {
-        throw const SourceException('规则提取出的内容过大，请缩小 CSS 选择范围。');
-      }
-      if (output.isNotEmpty) output.writeln();
-      output.write(value);
-    }
-    return output.toString();
   }
 
   Uri? _link(Uri base, String value) {

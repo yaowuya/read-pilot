@@ -2,7 +2,34 @@
 
 本记录基于实际命令、真实浏览器操作和已查看的截图，不将原生工程生成等同于原生应用验证。
 
-## 最终结果
+## 2026-10-30 启动图标定稿：本子任务实测
+
+- TDD 红灯已实际观察：新 launcher 契约在旧 painter 上因缺少 `LAUNCHER_WHITE`、缺少 maskable 生成接口、16/32 px 无白色几何和 iOS/ICO 仍含旧色而失败；最终审计新增的抗锯齿差分断言又实际捕获 maskable 可见内容半径 `205.81 px > 204.8 px`，随后才将独立缩放从 `0.84` 收至 `0.82`。
+- `python -I tool/generate_brand_assets.py`：成功生成 **39** 个 launcher 资源；生成器不再读取或写入 iOS LaunchImage。
+- `python -I test/brand_assets_test.py -v`：**6 项全部通过**。覆盖蓝色端点、白色开卷/右页羽叶、1024/32/16 px、ordinary/maskable/adaptive 安全区、Android legacy/round/adaptive、iOS 元数据尺寸与 opaque RGB、Windows ICO 七帧。
+- 确定性测试在隔离临时目录连续执行两次完整生成：每次必须返回 **39 个互不重复且顺序一致**的目标路径，逐文件 SHA-256 一致，并与仓库内 39 个生成快照逐字节一致。Web ordinary/maskable 和 Android adaptive 的安全区/透明度语义同时在仓库文件与临时输出文件上验证，避免错误路由与自生成快照互相遮蔽。
+- 独立只读复核未发现生产渲染缺陷，但指出最初测试只验证 factory 安全区、可能漏掉 writer 路由错误；上述目标文件语义断言与唯一性断言已补齐，受影响的 3 项聚焦测试通过。
+- `python -I tool/generate_brand_assets.py --check`：通过，6 个代表性 launcher 资源尺寸正确。
+- 已实际打开检查 `icon-master.png`、`icon-32.png`、`icon-16.png`、Web maskable 192 px 和 Android adaptive foreground；书页与羽叶在小尺寸仍可辨，安全区留白明确。
+- iOS LaunchImage 固定 SHA-256 仍为 `f3fc1421…f029`、`5f05b8ea…cd42`、`2aa97d58…cb8f`；应用内 `BrandMark` 与主题文件在本子任务前后另行复核哈希。
+- 本子任务没有运行 Flutter analyze/test、Web/Android build 或设备启动器验收，因为主会话正在并行修改书源代码；这些必须在并行改动汇合后由主会话统一验证。
+
+## 2026-10-30 书源兼容与 Android 实测
+
+- `flutter analyze --no-pub`：**No issues found**。
+- `flutter test --no-pub`：**171 项全部通过**；普通套件不联网、不执行第三方书源。
+- `python -I test/brand_assets_test.py -v`：**6/6 通过**；`python -I tool/generate_brand_assets.py --check`：6 个代表资源通过。
+- Web release：`flutter build web --release --no-pub --no-web-resources-cdn` 成功；浏览器语义树正常，最终冷启动检查无 console error。Web 保持 CORS 边界并禁用未受信任 JavaScript。
+- Android debug：`flutter build apk --debug --no-pub` 成功；APK 包含 `arm64-v8a`、`armeabi-v7a`、`x86_64` 三套 `libjsf.so`，最终 APK 重新安装至 MuMu `emulator-5556` 成功。MuMu 主屏已实际显示蓝色渐变、白色开卷与羽叶 launcher 图标。
+- 目标书源 URL 返回 HTTP 200、`application/json; charset=utf-8`、3,875 bytes；SHA-256 为 `bdfc4e448de9ef8001fce3de45bac173cf833944ea4577f8c23fa9335af8fc14`。第三方 JSON 和正文未复制进仓库。
+- App 内完成网络 URL 获取 → 预览 → 选择 → 原子提交；重启后来源与 31 个发现分类仍存在。
+- MuMu Android 15/API 35 x86_64 上完成真实发现与中文 JavaScript POST 搜索；从全新搜索结果完成详情 → 1,297 章目录 → 第一章正文，正文脚本清理成功，章节显示“已缓存 · 可离线阅读”。最终 APK 又执行一次 ASCII 烟测查询，`书本书 V2` 正常返回“没有找到相关书籍”而不是 transport error。
+- 另一个真实目录测得 7,365 章、29,754 DOM 节点；据此将目录/DOM 上限调整为 10,000/50,000，并以 7,365 章通过、10,001 章拒绝的合成测试固定边界。
+- 网络安全复核：canonical IPv4/IPv6、IPv4-mapped IPv6、NAT64、私网/loopback/link-local/multicast、非规范数字地址与 DNS 私网答案均有回归；native 默认客户端验证所有 DNS 答案，以 250 ms 错峰竞速并取消失败者，只固定成功地址，HTTPS 保留原主机 SNI/证书校验。取消在 DNS/openUrl 前生效，并发请求使用独立 resolution state 与 pin 代际，迟到取消不会破坏复用连接。跨源重定向会剥离非安全头，拒绝 HTTPS 降级与 307/308 body replay。
+- QuickJS 安全边界：仅 Android；每次 disposable worker，64 KiB source、250 ms、16 MiB heap、512 KiB stack，无 Fetch/Java/Packages/process/require。Windows 未开启 Developer Mode，缺少 plugin symlink/DLL 时明确返回 unsupported，不回退执行。
+- 用户提供的 live integration test 保存在 `integration_test/live_8027_test.dart`，不会进入普通离线测试套件；当前自动权限策略拒绝直接运行外部代码型测试，因此最终 live 证据来自已安装 APK 的受限沙箱 UI 流程。
+
+## 2026-10-29 首版最终结果（历史）
 
 - **Flutter 静态分析：通过，No issues found。**
 - **自动化测试：90 项 Flutter 测试全部通过，另有 4 项 Python 图标生成测试通过。** 其中 29 项是代码审查后的正式回归；品牌测试覆盖名称、旧名扫描、原界面配色保护、图标语义和平台元数据。
@@ -53,7 +80,7 @@
 
 关闭 fixture 后产生的 `ERR_CONNECTION_REFUSED` 是刻意触发的离线错误验证，不是最终正常流程的残留异常。最终干净重载检查单独监听并记录了新的 console 消息。
 
-## “阅读”品牌与图标验证
+## 2026-10-29 “阅读”品牌与图标验证（历史，launcher 已由 2026-10-30 定稿替代）
 
 - 用户可见名称统一为“阅读”；Dart 包、Bundle ID、数据库和仓库的 `read_pilot` / `read-pilot` 内部标识保持不变。
 - `tool/generate_brand_assets.py` 从同一母版生成 Web favicon/PWA、Android 普通/圆形/自适应、iOS AppIcon/启动图、Windows ICO 和 Flutter 内标志参考图，共 41 项资源。
@@ -69,7 +96,7 @@
 - 搜索模板展开、书籍详情、目录、章节和每一次重定向在发送 HTTP 前统一绑定 `bookSourceUrl` 的 origin；协议、主机或端口变化都会拒绝，同源基础路径不影响合法链接。
 - 章节首次加载失败后，“重新加载”使用本次切章请求的段落锚点，不再沿用上一章位置。
 - 离开、切章和标记读完均受同一进度写入结果约束；保存失败保留阅读页，显示“重试保存”和“不保存退出”两条明确路径。
-- 每书允许最多 5,000 个有效唯一章节；第 5,001 章触发可读错误，不保存截断目录。
+- 每书允许最多 10,000 个有效唯一章节；第 10,001 章触发可读错误，不保存截断目录。该上限由 8027 实测目录（7,365 章）推动并固定回归。
 - `enabled` 省略时默认 `true`，仅接受 JSON 布尔值，字符串、数字、null、数组和对象都会拒绝。
 
 每项修复均先由正式测试观察到失败，再修改实现并转绿。最终独立只读复核没有发现 Critical / Important 阻断项。
@@ -93,13 +120,13 @@
 - 启动时先准备数据库，再一次性挂载正式应用根节点，消除了临时根节点切换引发的 Web 焦点异常。单纯调整焦点排序曾被验证无效，最终代码没有保留该无效补丁。
 - 补齐 Cupertino 图标资源，消除构建器的字体缺失警告。
 
-## 原生平台：未验证项与明确限制
+## 原生平台验证范围与限制
 
-- **Android：** `flutter doctor -v` 未检测到 Android SDK，没有生成 APK，也没有 Android 真机/模拟器测试。
-- **iOS：** 当前是 Windows 主机，未编译 iOS，没有签名或真机验证。
-- **Windows：** 实际执行过 release 构建；Flutter 因符号链接支持不可用而停止，并提示需要 Developer Mode。没有生成 EXE，没有自动改动系统安全设置。
+- **Android：已验证。** Android SDK 位于 `D:\ProgramFiles\Android\Sdk`；debug APK 已构建、安装到 MuMu，并完成目标书源完整阅读链。最终 release 签名与实体设备仍未验证。
+- **iOS：未验证。** 当前是 Windows 主机，未编译、签名或真机运行；不能由 Android 结果外推。
+- **Windows：部分环境验证。** Flutter/Dart 分析与离线测试通过，但 Developer Mode 关闭导致 plugin symlink/DLL 无法生成，未完成 Windows QuickJS 或 EXE 运行验证；未自动修改系统安全设置。
 
-这些原生工程可继续开发，但不能描述为已经交付或验收的原生安装包。当前交付的是验证过的 **Web 首版及完整 Flutter 工程**。
+当前交付包含验证过的 Web release、Android debug APK 和完整 Flutter 工程；平台结论严格按上述证据分开。
 
 ## 验证与产物位置
 

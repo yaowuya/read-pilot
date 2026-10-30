@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:read_pilot/domain/book.dart';
+import 'package:read_pilot/domain/source_capability.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/services/source_importer.dart';
+import 'package:read_pilot/services/source_runtime/script_runtime.dart';
 
 Map<String, dynamic> sourceJson({
   String origin = 'https://books.example',
@@ -25,6 +27,7 @@ Map<String, dynamic> sourceJson({
   },
   'ruleBookInfo': {
     'name': '@CSS:h1@text',
+    'author': '@CSS:#info a@text',
     'intro': '@CSS:.intro@text',
     'tocUrl': '@CSS:.toc@href',
   },
@@ -49,6 +52,22 @@ Book bookResult({String url = 'https://books.example/book/1'}) => Book(
   addedAt: DateTime.utc(2026),
 );
 
+class _EngineScriptRuntime extends SandboxedScriptRuntime {
+  String? script;
+  Map<String, Object?>? globals;
+  Object? result;
+
+  @override
+  Future<Object?> evaluate(
+    String script, {
+    Map<String, Object?> globals = const {},
+  }) async {
+    this.script = script;
+    this.globals = globals;
+    return result;
+  }
+}
+
 void main() {
   final importer = SourceImporter();
 
@@ -61,45 +80,74 @@ void main() {
     expect(sources.single.enabled, isTrue);
   });
 
-  test('rejects unsupported executable fields with a field name', () {
-    final raw = sourceJson()..['jsLib'] = 'java.get("private")';
-    expect(
-      () => importer.parse(jsonEncode(raw)),
-      throwsA(
-        isA<FormatException>().having(
-          (e) => e.message,
-          'field',
-          contains('jsLib'),
-        ),
-      ),
-    );
-  });
+  test(
+    'accepts executable fields as format and reports runtime requirements',
+    () {
+      final raw = sourceJson()..['jsLib'] = 'java.get("private")';
+      final source = importer.parse(jsonEncode(raw)).single;
 
-  test('rejects JavaScript, arbitrary templates, XPath and regex rules', () {
-    for (final rule in [
-      '@js:1+1',
-      '{{java.get()}}',
-      '@XPath://a',
-      '@CSS:a@text##x##y',
-    ]) {
+      expect(source.toJson()['jsLib'], raw['jsLib']);
+      expect(
+        source.requiredCapabilities,
+        contains(SourceCapability.javascript),
+      );
+      expect(
+        source
+            .capabilitiesFor(SourceRuntimeProfile.nativeCore)
+            .runtimeImplemented,
+        isFalse,
+      );
+    },
+  );
+
+  test('accepts advanced rule syntax without claiming it is implemented', () {
+    final cases = <(String, String, SourceCapability)>[
+      ('@js:1+1', 'ruleSearch.name', SourceCapability.javascript),
+      ('{{java.get()}}', 'ruleSearch.name', SourceCapability.javascript),
+      ('@XPath://a', 'ruleSearch.name', SourceCapability.xpath),
+      ('@Json:\$.books[*]', 'ruleSearch.name', SourceCapability.jsonPath),
+      ('@CSS:a@text##x##y', 'ruleSearch.name', SourceCapability.regex),
+    ];
+    for (final (rule, path, capability) in cases) {
       final raw = sourceJson();
       (raw['ruleSearch'] as Map)['name'] = rule;
+      final source = importer.parse(jsonEncode(raw)).single;
+      expect(source.requiredCapabilities, contains(capability), reason: rule);
       expect(
-        () => importer.parse(jsonEncode(raw)),
-        throwsFormatException,
+        source
+            .capabilitiesFor(SourceRuntimeProfile.nativeCore)
+            .diagnostics
+            .map((item) => item.path),
+        contains(path),
         reason: rule,
       );
     }
+
     final raw = sourceJson()..['searchUrl'] = '/s?q={{key.toUpperCase()}}';
-    expect(() => importer.parse(jsonEncode(raw)), throwsFormatException);
+    final source = importer.parse(jsonEncode(raw)).single;
+    expect(source.requiredCapabilities, contains(SourceCapability.javascript));
   });
 
-  test('rejects advanced behavior instead of silently ignoring it', () {
-    for (final field in ['nextContentUrl', 'webJs', 'replaceRegex']) {
-      final raw = sourceJson();
-      (raw['ruleContent'] as Map)[field] = '@CSS:a@href';
-      expect(() => importer.parse(jsonEncode(raw)), throwsFormatException);
-    }
+  test('preserves advanced workflow fields and reports their capabilities', () {
+    final raw = sourceJson();
+    (raw['ruleContent'] as Map)
+      ..['nextContentUrl'] = '@CSS:a@href'
+      ..['webJs'] = 'document.body.innerHTML'
+      ..['replaceRegex'] = '广告##';
+
+    final source = importer.parse(jsonEncode(raw)).single;
+    expect(
+      source.requiredCapabilities,
+      containsAll({
+        SourceCapability.contentPagination,
+        SourceCapability.javascript,
+        SourceCapability.regex,
+      }),
+    );
+    expect(
+      (source.toJson()['ruleContent'] as Map)['nextContentUrl'],
+      '@CSS:a@href',
+    );
   });
 
   test('rejects invalid source types and unsafe URL schemes', () {
@@ -111,12 +159,59 @@ void main() {
       final raw = sourceJson()..['bookSourceUrl'] = origin;
       expect(() => importer.parse(jsonEncode(raw)), throwsFormatException);
     }
-    expect(
-      () => importer.parse(jsonEncode(sourceJson()..['bookSourceType'] = 2)),
-      throwsFormatException,
-    );
+    for (final type in [-1, 5, '2']) {
+      expect(
+        () =>
+            importer.parse(jsonEncode(sourceJson()..['bookSourceType'] = type)),
+        throwsFormatException,
+      );
+    }
+    final imageSource = importer
+        .parse(jsonEncode(sourceJson()..['bookSourceType'] = 2))
+        .single;
+    expect(imageSource.requiredCapabilities, contains(SourceCapability.image));
     expect(() => importer.parse('{}'), throwsFormatException);
     expect(() => importer.parse('[]'), throwsFormatException);
+  });
+
+  test('reports missing required workflow rules before HTTP', () async {
+    final searchRaw = sourceJson();
+    (searchRaw['ruleSearch'] as Map).remove('bookList');
+    final contentRaw = sourceJson()..['ruleContent'] = <String, dynamic>{};
+    final searchSource = importer.parse(jsonEncode(searchRaw)).single;
+    final contentSource = importer.parse(jsonEncode(contentRaw)).single;
+    final engine = SourceEngine(
+      client: MockClient((_) async => fail('must not request')),
+    );
+    addTearDown(engine.close);
+
+    await expectLater(
+      engine.search(searchSource, '测试'),
+      throwsA(
+        isA<SourceException>().having(
+          (error) => error.message,
+          'message',
+          contains('ruleSearch.bookList'),
+        ),
+      ),
+    );
+    await expectLater(
+      engine.loadChapter(
+        contentSource,
+        Chapter(
+          id: 'c',
+          title: 'Chapter',
+          url: 'https://books.example/chapter/1',
+        ),
+      ),
+      throwsA(
+        isA<SourceException>().having(
+          (error) => error.message,
+          'message',
+          contains('ruleContent.content'),
+        ),
+      ),
+    );
   });
 
   test('preserves unknown descriptive metadata for export', () {
@@ -127,6 +222,107 @@ void main() {
     );
   });
 
+  test('evaluates a script-wrapped search request before planning', () async {
+    late http.Request captured;
+    final scripts = _EngineScriptRuntime()
+      ..result = '/search,{"method":"POST","body":{"q":"测试词","page":"3"}}';
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          '<div class="book"><a href="/book/1">脚本搜索结果</a></div>',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+      scriptRuntime: scripts,
+    );
+    addTearDown(engine.close);
+    final source = importer
+        .parse(
+          jsonEncode(
+            sourceJson(
+              searchUrl:
+                  '<js>"/search?q=" + encodeURIComponent(key) + "&page=" + page</js>',
+            ),
+          ),
+        )
+        .single;
+
+    final books = await engine.search(source, '测试词', page: 3);
+
+    expect(books.single.title, '脚本搜索结果');
+    expect(captured.method, 'POST');
+    expect(captured.body, 'q=%E6%B5%8B%E8%AF%95%E8%AF%8D&page=3');
+    expect(scripts.script, contains('encodeURIComponent(key)'));
+    expect(scripts.globals, {'key': '测试词', 'page': 3, 'baseUrl': source.id});
+  });
+
+  test('post-processes content through bounded script globals', () async {
+    final scripts = _EngineScriptRuntime()..result = '清理后的正文';
+    final engine = SourceEngine(
+      client: MockClient(
+        (_) async => http.Response(
+          '<article id="content">原始正文广告</article>',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        ),
+      ),
+      scriptRuntime: scripts,
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson()
+      ..['ruleContent'] = {
+        'content': '@CSS:#content@text@js:result.replace(/广告/g, "")',
+      };
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final chapter = await engine.loadChapter(
+      source,
+      Chapter(
+        id: 'chapter-1',
+        title: '第一章',
+        url: 'https://books.example/chapter/1',
+      ),
+    );
+
+    expect(chapter.paragraphs, ['清理后的正文']);
+    expect(scripts.globals, {
+      'baseUrl': 'https://books.example',
+      'result': '原始正文广告',
+    });
+  });
+
+  test('parses explore categories and loads a selected page', () async {
+    late Uri requested;
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        requested = request.url;
+        return http.Response(
+          '<div class="item"><a href="/book/1">发现书籍</a></div>',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson()
+      ..['exploreUrl'] = '热门::/genre/{{page}}\n完结::/finished/{{page}}'
+      ..['ruleExplore'] = {
+        'bookList': '@CSS:.item',
+        'name': '@CSS:a@text',
+        'bookUrl': '@CSS:a@href',
+      };
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final entries = source.exploreEntries;
+    final books = await engine.explore(source, entries.first, page: 2);
+
+    expect(entries.map((entry) => entry.title), ['热门', '完结']);
+    expect(requested.path, '/genre/2');
+    expect(books.single.title, '发现书籍');
+  });
+
   test('searches, resolves detail and TOC links, and extracts paragraphs', () async {
     final requests = <Uri>[];
     final client = MockClient((request) async {
@@ -135,7 +331,7 @@ void main() {
         '/search' =>
           '<div class="book"><a href="/book/1">测试书</a><span class="author">作者</span></div>',
         '/book/1' =>
-          '<h1>完整书名</h1><p class="intro">内容介绍</p><a class="toc" href="/toc/1">目录</a>',
+          '<h1>完整书名</h1><div id="info"><a>完整作者</a><a>最新章节</a></div><p class="intro">内容介绍</p><a class="toc" href="/toc/1">目录</a>',
         '/toc/1' =>
           '<div id="chapters"><a href="../chapter/1">第一章</a><a href="/chapter/2">第二章</a></div>',
         '/chapter/1' =>
@@ -156,12 +352,296 @@ void main() {
     expect(requests.first.queryParameters['page'], '1');
     final book = await engine.loadBook(source, results.single);
     expect(book.title, '完整书名');
+    expect(book.author, '完整作者');
     expect(book.chapters, hasLength(2));
     expect(book.chapters.first.url, 'https://books.example/chapter/1');
     final chapter = await engine.loadChapter(source, book.chapters.first);
     expect(chapter.paragraphs, ['第一段。', '第二段。', '换行。']);
     expect(chapter.paragraphs.join(), isNot(contains('危险代码')));
     expect(chapter.paragraphs.join(), isNot(contains('隐藏样式')));
+  });
+
+  test('searches a JSON response with the safe JSONPath subset', () async {
+    final engine = SourceEngine(
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'books': [
+              {'title': 'JSON 书籍', 'author': 'JSON 作者', 'url': '/book/json'},
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        ),
+      ),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson()
+      ..['ruleSearch'] = {
+        'bookList': r'@Json:$.books[*]',
+        'name': r'@Json:$.title',
+        'author': r'@Json:$.author',
+        'bookUrl': r'@Json:$.url',
+      };
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final results = await engine.search(source, 'JSON');
+
+    expect(results.single.title, 'JSON 书籍');
+    expect(results.single.author, 'JSON 作者');
+    expect(results.single.url, 'https://books.example/book/json');
+  });
+
+  test('runs the full reader workflow over JSONPath responses', () async {
+    final requests = <Uri>[];
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        requests.add(request.url);
+        final payload = switch (request.url.path) {
+          '/search' => {
+            'books': [
+              {'title': 'JSON 书籍', 'author': 'JSON 作者', 'url': '/book/json'},
+            ],
+          },
+          '/book/json' => {
+            'title': '完整 JSON 书名',
+            'author': '完整作者',
+            'intro': 'JSON 简介',
+            'toc': '/toc/json',
+          },
+          '/toc/json' => {
+            'chapters': [
+              {'title': '第一章', 'url': '/chapter/1'},
+            ],
+          },
+          '/chapter/1' => {'title': '第一章 · JSON', 'content': '第一段。\n第二段。'},
+          _ => null,
+        };
+        return http.Response(
+          payload == null ? '' : jsonEncode(payload),
+          payload == null ? 404 : 200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson()
+      ..['ruleSearch'] = {
+        'bookList': r'@Json:$.books[*]',
+        'name': r'@Json:$.title',
+        'author': r'@Json:$.author',
+        'bookUrl': r'@Json:$.url',
+      }
+      ..['ruleBookInfo'] = {
+        'name': r'@Json:$.title',
+        'author': r'@Json:$.author',
+        'intro': r'@Json:$.intro',
+        'tocUrl': r'@Json:$.toc',
+      }
+      ..['ruleToc'] = {
+        'chapterList': r'@Json:$.chapters[*]',
+        'chapterName': r'@Json:$.title',
+        'chapterUrl': r'@Json:$.url',
+      }
+      ..['ruleContent'] = {
+        'title': r'@Json:$.title',
+        'content': r'@Json:$.content',
+      };
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final result = (await engine.search(source, 'JSON')).single;
+    final book = await engine.loadBook(source, result);
+    final chapter = await engine.loadChapter(source, book.chapters.single);
+
+    expect(book.title, '完整 JSON 书名');
+    expect(book.author, '完整作者');
+    expect(book.description, 'JSON 简介');
+    expect(chapter.title, '第一章 · JSON');
+    expect(chapter.paragraphs, ['第一段。', '第二段。']);
+    expect(requests.map((uri) => uri.path), [
+      '/search',
+      '/book/json',
+      '/toc/json',
+      '/chapter/1',
+    ]);
+  });
+
+  test(
+    'applies static headers and a default user-agent to every workflow',
+    () async {
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        final body = switch (request.url.path) {
+          '/search' => '<div class="book"><a href="/book/1">测试书</a></div>',
+          '/book/1' => '<h1>测试书</h1><a class="toc" href="/toc/1">目录</a>',
+          '/toc/1' => '<div id="chapters"><a href="/chapter/1">第一章</a></div>',
+          '/chapter/1' => '<article><p>正文。</p></article>',
+          _ => '',
+        };
+        return http.Response(
+          body,
+          body.isEmpty ? 404 : 200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      });
+      final raw = sourceJson()
+        ..['header'] = {
+          'Referer': 'https://books.example/',
+          'X-Reader': 'enabled',
+        };
+      final source = importer.parse(jsonEncode(raw)).single;
+      final engine = SourceEngine(client: client);
+      addTearDown(engine.close);
+
+      final result = (await engine.search(source, '测试')).single;
+      final book = await engine.loadBook(source, result);
+      await engine.loadChapter(source, book.chapters.single);
+
+      expect(requests, hasLength(4));
+      for (final request in requests) {
+        expect(request.headers['referer'], 'https://books.example/');
+        expect(request.headers['x-reader'], 'enabled');
+        expect(request.headers['user-agent'], isNotEmpty);
+      }
+    },
+  );
+
+  test('executes POST search options through the public workflow', () async {
+    late http.Request captured;
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          '<div class="book"><a href="/book/1">POST 结果</a></div>',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final source = importer
+        .parse(
+          jsonEncode(
+            sourceJson(
+              searchUrl: '/search,{"method":"POST","body":{"q":"{{key}}"}}',
+            ),
+          ),
+        )
+        .single;
+
+    final results = await engine.search(source, '月 下');
+
+    expect(results.single.title, 'POST 结果');
+    expect(captured.method, 'POST');
+    expect(captured.body, 'q=%E6%9C%88+%E4%B8%8B');
+  });
+
+  test('follows bounded TOC pagination and stops cycles', () async {
+    final requested = <Uri>[];
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        requested.add(request.url);
+        final body = switch (request.url.path) {
+          '/book/1' => '<h1>分页目录书</h1><a class="toc" href="/toc/1">目录</a>',
+          '/toc/1' =>
+            '<div id="chapters"><a href="/chapter/1">第一章</a></div><a class="next" href="/toc/2">下一页</a>',
+          '/toc/2' =>
+            '<div id="chapters"><a href="/chapter/2">第二章</a></div><a class="next" href="/toc/1">上一页</a>',
+          _ => '',
+        };
+        return http.Response(
+          body,
+          body.isEmpty ? 404 : 200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson();
+    (raw['ruleToc'] as Map)['nextTocUrl'] = '@CSS:a.next@href';
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final book = await engine.loadBook(source, bookResult());
+
+    expect(book.chapters.map((chapter) => chapter.title), ['第一章', '第二章']);
+    expect(requested.map((uri) => uri.path), ['/book/1', '/toc/1', '/toc/2']);
+  });
+
+  test('follows bounded content pagination and stops cycles', () async {
+    final requested = <Uri>[];
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        requested.add(request.url);
+        final body = switch (request.url.path) {
+          '/chapter/1' =>
+            '<article><p>第一页。</p></article><a class="next" href="/chapter/2">下一页</a>',
+          '/chapter/2' =>
+            '<article><p>第二页。</p></article><a class="next" href="/chapter/1">上一页</a>',
+          _ => '',
+        };
+        return http.Response(
+          body,
+          body.isEmpty ? 404 : 200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson();
+    (raw['ruleContent'] as Map)['nextContentUrl'] = '@CSS:a.next@href';
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final chapter = await engine.loadChapter(
+      source,
+      Chapter(
+        id: 'chapter-1',
+        title: '分页章',
+        url: 'https://books.example/chapter/1',
+      ),
+    );
+
+    expect(chapter.paragraphs, ['第一页。', '第二页。']);
+    expect(requested.map((uri) => uri.path), ['/chapter/1', '/chapter/2']);
+  });
+
+  test('rejects content pagination beyond ten pages', () async {
+    final requested = <Uri>[];
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        requested.add(request.url);
+        final page = int.parse(request.url.pathSegments.last);
+        return http.Response(
+          '<article><p>第 $page 页。</p></article>'
+          '<a class="next" href="/chapter/${page + 1}">下一页</a>',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson();
+    (raw['ruleContent'] as Map)['nextContentUrl'] = '@CSS:a.next@href';
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    await expectLater(
+      engine.loadChapter(
+        source,
+        Chapter(
+          id: 'chapter-1',
+          title: '超长分页章',
+          url: 'https://books.example/chapter/1',
+        ),
+      ),
+      throwsA(
+        isA<SourceException>().having(
+          (error) => error.message,
+          'message',
+          contains('10'),
+        ),
+      ),
+    );
+    expect(requested, hasLength(10));
   });
 
   test('does not promote javascript links into navigable books', () async {
@@ -353,25 +833,23 @@ void main() {
     expect(chapter.paragraphs, ['Content']);
   });
 
-  test(
-    'accepts a complete 5000-chapter TOC at the documented boundary',
-    () async {
-      final body =
-          '<div id="chapters">${List.generate(5000, (i) => '<a href="/c/$i">Chapter $i</a>').join()}</div>';
-      final source = importer.parse(jsonEncode(sourceJson())).single;
-      final engine = SourceEngine(
-        client: MockClient((_) async => http.Response(body, 200)),
-      );
-      addTearDown(engine.close);
-      final book = await engine.loadBook(source, bookResult());
-      expect(book.chapters, hasLength(5000));
-      expect(book.chapters.last.url, 'https://books.example/c/4999');
-    },
-  );
+  test('accepts the measured 7365-chapter, 29k-node TOC shape', () async {
+    final body =
+        '<div id="chapters">${List.generate(7365, (i) => '<a href="/c/$i"><span><em>Chapter $i</em></span></a>').join()}</div>';
+    expect(utf8.encode(body).length, lessThan(2 * 1024 * 1024));
+    final source = importer.parse(jsonEncode(sourceJson())).single;
+    final engine = SourceEngine(
+      client: MockClient((_) async => http.Response(body, 200)),
+    );
+    addTearDown(engine.close);
+    final book = await engine.loadBook(source, bookResult());
+    expect(book.chapters, hasLength(7365));
+    expect(book.chapters.last.url, 'https://books.example/c/7364');
+  });
 
   test('rejects an oversized TOC instead of silently losing chapters', () async {
     final body =
-        '<div id="chapters">${List.generate(5001, (i) => '<a href="/c/$i">Chapter $i</a>').join()}</div>';
+        '<div id="chapters">${List.generate(10001, (i) => '<a href="/c/$i">Chapter $i</a>').join()}</div>';
     expect(utf8.encode(body).length, lessThan(2 * 1024 * 1024));
     final source = importer.parse(jsonEncode(sourceJson())).single;
     final engine = SourceEngine(
@@ -384,7 +862,7 @@ void main() {
         isA<SourceException>().having(
           (error) => error.message,
           'limit',
-          contains('5000'),
+          contains('10000'),
         ),
       ),
     );
@@ -424,6 +902,29 @@ void main() {
       );
     });
   }
+
+  test('cancels search even when the HTTP client ignores abort', () async {
+    final source = importer.parse(jsonEncode(sourceJson())).single;
+    final abort = Completer<void>();
+    final engine = SourceEngine(
+      client: MockClient((_) => Completer<http.Response>().future),
+    );
+    addTearDown(engine.close);
+
+    final pending = engine.search(source, '书', abortTrigger: abort.future);
+    abort.complete();
+
+    await expectLater(
+      pending.timeout(const Duration(milliseconds: 200)),
+      throwsA(
+        isA<SourceException>().having(
+          (error) => error.message,
+          'message',
+          contains('取消'),
+        ),
+      ),
+    );
+  });
 
   test('times out rather than leaving search busy indefinitely', () async {
     final source = importer.parse(jsonEncode(sourceJson())).single;

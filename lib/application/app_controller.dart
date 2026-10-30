@@ -5,15 +5,26 @@ import '../data/sample_catalog.dart';
 import '../domain/book.dart';
 import '../domain/book_source.dart';
 import '../domain/reader_settings.dart';
+import '../domain/source_import.dart';
 import '../services/source_engine.dart';
-import '../services/source_importer.dart';
+import '../services/source_import_service.dart';
+import '../services/source_runtime/source_search_scheduler.dart';
 import '../services/txt_importer.dart';
 
 class AppController extends ChangeNotifier {
-  AppController(this.repository, this.engine);
+  AppController(
+    this.repository,
+    this.engine, {
+    SourceImportService? sourceImportService,
+    SourceSearchScheduler? sourceSearchScheduler,
+  }) : sourceImportService = sourceImportService ?? SourceImportService(),
+       _sourceSearchScheduler =
+           sourceSearchScheduler ?? const SourceSearchScheduler();
 
   final AppRepository repository;
   final SourceEngine engine;
+  final SourceImportService sourceImportService;
+  final SourceSearchScheduler _sourceSearchScheduler;
   List<Book> _books = [];
   List<Book> _catalog = [];
   List<BookSource> _sources = [];
@@ -25,6 +36,17 @@ class AppController extends ChangeNotifier {
   List<Book> get books => List.unmodifiable(_books);
   List<Book> get catalog => _catalog;
   List<BookSource> get sources => List.unmodifiable(_sources);
+  List<SourceExploreCategory> get exploreCategories {
+    final categories = <SourceExploreCategory>[];
+    for (final source in _sources.where((source) => source.enabled)) {
+      for (final entry in source.exploreEntries) {
+        categories.add(SourceExploreCategory(source, entry));
+        if (categories.length == 500) return List.unmodifiable(categories);
+      }
+    }
+    return List.unmodifiable(categories);
+  }
+
   List<Bookmark> get bookmarks => List.unmodifiable(_bookmarks);
   ReaderSettings get settings => _settings;
 
@@ -148,12 +170,28 @@ class AppController extends ChangeNotifier {
     throw const SourceException('书源已移除。已缓存章节仍可阅读，获取新章节需重新导入书源。');
   }
 
-  Future<int> importSources(String input) async {
-    final imported = SourceImporter().parse(input);
-    await repository.saveSources(imported);
+  Future<SourceImportPreview> prepareSourceImport(
+    SourceImportInput input, {
+    Future<void>? abortTrigger,
+  }) => sourceImportService.prepare(input, abortTrigger: abortTrigger);
+
+  Future<SourceImportCommitResult> commitSourceImport(
+    SourceImportPreview preview, {
+    Set<String>? selectedSourceIds,
+  }) async {
+    final result = await repository.commitSourceImport(
+      preview,
+      selectedSourceIds: selectedSourceIds,
+    );
     _sources = await repository.sources();
     _notify();
-    return imported.length;
+    return result;
+  }
+
+  Future<int> importSources(String input) async {
+    final preview = await prepareSourceImport(SourceImportInput.text(input));
+    final result = await commitSourceImport(preview);
+    return result.total;
   }
 
   Future<void> setSourceEnabled(BookSource source, bool value) async {
@@ -171,14 +209,53 @@ class AppController extends ChangeNotifier {
     _notify();
   }
 
-  Future<List<SourceSearchGroup>> searchSources(String keyword) => Future.wait([
-    for (final source in _sources.where((source) => source.enabled))
-      _search(source, keyword),
-  ]);
+  Future<List<SourceSearchGroup>> searchSources(
+    String keyword, {
+    int page = 1,
+    Future<void>? abortTrigger,
+  }) => _sourceSearchScheduler.run(
+    _sources.where((source) => source.enabled),
+    (source) =>
+        _search(source, keyword, page: page, abortTrigger: abortTrigger),
+    abortTrigger: abortTrigger,
+  );
 
-  Future<SourceSearchGroup> _search(BookSource source, String keyword) async {
+  Future<SourceSearchGroup> exploreSource(
+    SourceExploreCategory category, {
+    int page = 1,
+    Future<void>? abortTrigger,
+  }) async {
     try {
-      return SourceSearchGroup(source, await engine.search(source, keyword));
+      return SourceSearchGroup(
+        category.source,
+        await engine.explore(
+          category.source,
+          category.entry,
+          page: page,
+          abortTrigger: abortTrigger,
+        ),
+      );
+    } catch (error) {
+      return SourceSearchGroup(category.source, [], error: error.toString());
+    }
+  }
+
+  Future<SourceSearchGroup> _search(
+    BookSource source,
+    String keyword, {
+    required int page,
+    Future<void>? abortTrigger,
+  }) async {
+    try {
+      return SourceSearchGroup(
+        source,
+        await engine.search(
+          source,
+          keyword,
+          page: page,
+          abortTrigger: abortTrigger,
+        ),
+      );
     } catch (error) {
       return SourceSearchGroup(source, [], error: error.toString());
     }
@@ -220,8 +297,17 @@ class AppController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     engine.close();
+    sourceImportService.close();
     super.dispose();
   }
+}
+
+class SourceExploreCategory {
+  const SourceExploreCategory(this.source, this.entry);
+
+  final BookSource source;
+  final SourceExploreEntry entry;
+  String get id => '${source.id}::${entry.title}::${entry.url}';
 }
 
 class SourceSearchGroup {

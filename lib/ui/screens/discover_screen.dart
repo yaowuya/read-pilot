@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
@@ -24,38 +26,156 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   final _query = TextEditingController();
   String _category = '全部';
   String _submitted = '';
+  SourceExploreCategory? _activeExplore;
   List<SourceSearchGroup> _remote = [];
   bool _searching = false;
+  bool _loadingMore = false;
+  bool _hasMore = false;
+  int _page = 0;
   int _generation = 0;
+  Completer<void>? _abort;
 
   @override
   void dispose() {
+    if (!(_abort?.isCompleted ?? true)) _abort!.complete();
     _query.dispose();
     super.dispose();
   }
 
-  Future<void> _search() async {
-    final query = _query.text.trim();
-    final generation = ++_generation;
+  Future<void> _search({bool loadMore = false}) async {
+    if (loadMore && (_searching || _loadingMore || !_hasMore || _page >= 10)) {
+      return;
+    }
+    final query = loadMore ? _submitted : _query.text.trim();
+    if (!(_abort?.isCompleted ?? true)) _abort!.complete();
+    final generation = loadMore ? _generation : ++_generation;
+    final page = loadMore ? _page + 1 : 1;
+    final abort = Completer<void>();
     setState(() {
-      _submitted = query;
-      _searching = query.isNotEmpty;
-      _remote = [];
+      if (loadMore) {
+        _loadingMore = true;
+      } else {
+        _submitted = query;
+        _activeExplore = null;
+        _searching = query.isNotEmpty;
+        _remote = [];
+        _page = 0;
+        _hasMore = false;
+      }
+      _abort = query.isEmpty ? null : abort;
     });
     if (query.isEmpty) return;
-    final results = await widget.controller.searchSources(query);
+    final results = await widget.controller.searchSources(
+      query,
+      page: page,
+      abortTrigger: abort.future,
+    );
     if (mounted && generation == _generation) {
       setState(() {
         _searching = false;
-        _remote = results;
+        _loadingMore = false;
+        _remote = loadMore ? _mergeResults(_remote, results) : results;
+        _page = page;
+        _hasMore =
+            page < 10 &&
+            results.any(
+              (group) => group.error == null && group.books.isNotEmpty,
+            );
+        _abort = null;
       });
     }
+  }
+
+  Future<void> _explore(
+    SourceExploreCategory category, {
+    bool loadMore = false,
+  }) async {
+    if (loadMore && (_searching || _loadingMore || !_hasMore || _page >= 10)) {
+      return;
+    }
+    if (!(_abort?.isCompleted ?? true)) _abort!.complete();
+    final generation = loadMore ? _generation : ++_generation;
+    final page = loadMore ? _page + 1 : 1;
+    final abort = Completer<void>();
+    setState(() {
+      if (loadMore) {
+        _loadingMore = true;
+      } else {
+        _submitted = '';
+        _activeExplore = category;
+        _searching = true;
+        _remote = [];
+        _page = 0;
+        _hasMore = false;
+      }
+      _abort = abort;
+    });
+    final result = await widget.controller.exploreSource(
+      category,
+      page: page,
+      abortTrigger: abort.future,
+    );
+    if (mounted && generation == _generation) {
+      setState(() {
+        _searching = false;
+        _loadingMore = false;
+        final results = [result];
+        _remote = loadMore ? _mergeResults(_remote, results) : results;
+        _page = page;
+        _hasMore = page < 10 && result.error == null && result.books.isNotEmpty;
+        _abort = null;
+      });
+    }
+  }
+
+  void _loadMore() {
+    final category = _activeExplore;
+    if (category == null) {
+      _search(loadMore: true);
+    } else {
+      _explore(category, loadMore: true);
+    }
+  }
+
+  List<SourceSearchGroup> _mergeResults(
+    List<SourceSearchGroup> current,
+    List<SourceSearchGroup> next,
+  ) {
+    final merged = {for (final group in current) group.source.id: group};
+    for (final group in next) {
+      final existing = merged[group.source.id];
+      if (existing == null) {
+        merged[group.source.id] = group;
+        continue;
+      }
+      final books = {
+        for (final book in existing.books) book.id: book,
+        for (final book in group.books) book.id: book,
+      }.values.toList();
+      merged[group.source.id] = SourceSearchGroup(
+        group.source,
+        books,
+        error: books.isEmpty ? group.error ?? existing.error : null,
+      );
+    }
+    return merged.values.toList();
+  }
+
+  void _cancelSearch() {
+    if (!(_abort?.isCompleted ?? true)) _abort!.complete();
+    _generation++;
+    setState(() {
+      _searching = false;
+      _loadingMore = false;
+      _abort = null;
+    });
   }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 650;
+      final busy = _searching || _loadingMore;
       final books = widget.controller.catalog
           .where(
             (book) =>
@@ -84,8 +204,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               ),
               const SizedBox(width: 12),
               FilledButton(
-                onPressed: _searching ? null : _search,
-                child: Text(_searching ? '搜索中' : '搜索'),
+                onPressed: busy ? _cancelSearch : _search,
+                child: Text(busy ? '取消' : '搜索'),
               ),
             ],
           ),
@@ -138,11 +258,36 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 onTap: () => widget.onDetails(book),
               ),
             ),
-          if (_submitted.isNotEmpty) ...[
+          if (_submitted.isEmpty &&
+              widget.controller.exploreCategories.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Text('书源发现', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final category in widget.controller.exploreCategories)
+                  ActionChip(
+                    key: ValueKey('discover-explore-${category.id}'),
+                    label: Text(category.entry.title),
+                    tooltip: category.source.name,
+                    onPressed: busy ? null : () => _explore(category),
+                  ),
+              ],
+            ),
+          ],
+          if (_submitted.isNotEmpty || _activeExplore != null) ...[
             const SizedBox(height: 20),
             Row(
               children: [
-                Text('我的书源', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  _activeExplore == null
+                      ? '我的书源'
+                      : '${_activeExplore!.entry.title} · '
+                            '${_activeExplore!.source.name}',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const Spacer(),
                 TextButton(
                   onPressed: widget.onSources,
@@ -157,9 +302,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 child: Center(child: CircularProgressIndicator()),
               ),
             if (!_searching && _remote.isEmpty)
-              const EmptyState(
-                title: '还没有启用的网络书源',
-                description: '在“书源”中导入你有权访问的书库配置，再来搜索。',
+              EmptyState(
+                title: _activeExplore == null ? '还没有启用的网络书源' : '这个分类暂时没有书籍',
+                description: _activeExplore == null
+                    ? '在“书源”中导入你有权访问的书库配置，再来搜索。'
+                    : '可以稍后重试，或选择其他书源分类。',
               ),
             for (final group in _remote) ...[
               Padding(
@@ -178,7 +325,17 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                         group.error!,
                         style: const TextStyle(color: AppColors.muted),
                       ),
-                      TextButton(onPressed: _search, child: const Text('重新搜索')),
+                      TextButton(
+                        onPressed: () {
+                          final category = _activeExplore;
+                          if (category == null) {
+                            _search();
+                          } else {
+                            _explore(category);
+                          }
+                        },
+                        child: const Text('重新搜索'),
+                      ),
                     ],
                   ),
                 )
@@ -200,6 +357,19 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                     ),
                   ),
             ],
+            if (_remote.isNotEmpty && (_hasMore || _loadingMore))
+              Padding(
+                padding: const EdgeInsets.only(top: 18),
+                child: Center(
+                  child: OutlinedButton(
+                    key: const Key('discover-load-more'),
+                    onPressed: _loadingMore ? _cancelSearch : _loadMore,
+                    child: Text(
+                      _loadingMore ? '取消加载' : '加载下一页（${_page + 1}/10）',
+                    ),
+                  ),
+                ),
+              ),
           ] else ...[
             const SizedBox(height: 12),
             QuietPanel(

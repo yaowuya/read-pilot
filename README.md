@@ -2,9 +2,9 @@
 
 一个用 Flutter 独立实现的、离线优先的中文阅读应用。阅读体验参考微信读书的简洁布局，书源机制参考 Legado 的声明式规则，但不复制微信读书品牌素材，也不移植 Legado 的 Kotlin 实现。
 
-![阅读古风图标](assets/branding/icon-32.png)
+![阅读启动图标](assets/branding/icon-32.png)
 
-品牌图标以宣纸、墨色展卷、朱砂月轮和闲章为核心；这些古风色彩只用于图标，应用界面继续使用原有科技蓝和冷灰背景。用户可见名称统一为“阅读”；仓库、Dart 包、Bundle ID 与数据库继续保留 `read-pilot` / `read_pilot` 内部标识，以兼容现有安装和本地数据。图标可用 `python -I tool/generate_brand_assets.py` 从同一母版重新生成。
+App 启动图标采用用户确认的竖向蓝色渐变（顶部 `#3AA9FF`、底部 `#28A1FF`），以及本项目原创的白色展开书页轮廓和从右页向上生长的羽叶；不复制微信读书的书本、气泡或其它品牌图形。圆角由各平台 launcher mask 呈现，普通位图保持全幅不透明。应用内 `BrandMark` 继续使用宣纸、朱砂与墨色构图，iOS LaunchImage 和界面原有科技蓝/冷灰配色均不变。用户可见名称统一为“阅读”；仓库、Dart 包、Bundle ID 与数据库继续保留 `read-pilot` / `read_pilot` 内部标识，以兼容现有安装和本地数据。图标可用 `python -I tool/generate_brand_assets.py` 从同一归一化母版重新生成。
 
 ## 当前功能
 

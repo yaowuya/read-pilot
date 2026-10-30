@@ -1,12 +1,12 @@
 import 'dart:convert';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book_source.dart';
 import '../components/common.dart';
+import '../components/source_import_sheet.dart';
 import '../theme.dart';
 
 class SourcesScreen extends StatefulWidget {
@@ -99,7 +99,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
           if (widget.controller.sources.isEmpty)
             EmptyState(
               title: '阅读，也可以有自己的来源',
-              description: '导入 Legado 风格的声明式 CSS 书源。\n仅支持你有权访问的文本内容，不执行远程脚本。',
+              description:
+                  '导入 Legado 风格的声明式书源。\nAndroid 仅在受限沙箱中执行规则脚本，Web 不执行脚本。',
               action: OutlinedButton.icon(
                 onPressed: _import,
                 icon: const Icon(Icons.file_upload_outlined, size: 19),
@@ -215,12 +216,12 @@ class _SourcesScreenState extends State<SourcesScreen> {
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  '支持 CSS 选择器、HTTP(S) GET 和 UTF-8。暂不支持 JavaScript、XPath、登录解密或自动翻页。复杂书源会明确提示不支持的字段，不会假装兼容。',
+                  '支持 CSS/legacy、安全 XPath 子集、RFC JSONPath、GET/POST/HEAD、UTF-8/GBK 与有界分页。Android 可在 QuickJS 沙箱中执行限定规则脚本；登录、解密、媒体与设备 helper 仍会明确标记为不支持。',
                   style: TextStyle(color: AppColors.muted, height: 1.9),
                 ),
                 const SizedBox(height: 10),
                 const Text(
-                  'Web 版遵守浏览器跨域规则（CORS）。HTTP 传输不加密，请勿在来源地址中填写账号或密码。',
+                  'Web 版遵守浏览器跨域规则（CORS）且不执行未受信任脚本。HTTP 传输不加密，请勿在来源地址中填写账号或密码。',
                   style: TextStyle(
                     fontSize: 12,
                     height: 1.8,
@@ -240,7 +241,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
     isScrollControlled: true,
     showDragHandle: true,
     constraints: const BoxConstraints(maxWidth: 680),
-    builder: (_) => _SourceImport(controller: widget.controller),
+    builder: (_) => SourceImportSheet(controller: widget.controller),
   );
 
   void _view(BookSource source) {
@@ -275,128 +276,4 @@ class _SourcesScreenState extends State<SourcesScreen> {
       ),
     );
   }
-}
-
-class _SourceImport extends StatefulWidget {
-  const _SourceImport({required this.controller});
-  final AppController controller;
-  @override
-  State<_SourceImport> createState() => _SourceImportState();
-}
-
-class _SourceImportState extends State<_SourceImport> {
-  final _text = TextEditingController();
-  String? _error;
-  bool _busy = false;
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pick() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['json'],
-        withData: true,
-      );
-      if (!mounted || result == null) return;
-      final file = result.files.single;
-      if (file.size > 1024 * 1024) {
-        throw const FormatException('书源文件不能超过 1 MiB。');
-      }
-      if (file.bytes == null) throw const FormatException('无法读取文件，请重新选择。');
-      _text.text = utf8.decode(file.bytes!);
-      setState(() => _error = null);
-    } catch (error) {
-      if (mounted) setState(() => _error = errorMessage(error));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    padding: EdgeInsets.fromLTRB(
-      24,
-      0,
-      24,
-      28 + MediaQuery.viewInsetsOf(context).bottom,
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          children: [
-            Text('导入书源', style: Theme.of(context).textTheme.titleLarge),
-            const Spacer(),
-            TextButton.icon(
-              onPressed: _busy ? null : _pick,
-              icon: const Icon(Icons.folder_open_outlined, size: 19),
-              label: const Text('选择文件'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        const Text(
-          '粘贴 JSON 对象或数组，最大 1 MiB。相同地址的书源会更新配置。',
-          style: TextStyle(fontSize: 13, color: AppColors.muted, height: 1.7),
-        ),
-        const SizedBox(height: 20),
-        const Text('书源 JSON', style: TextStyle(fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
-        TextField(
-          key: const Key('source-json'),
-          controller: _text,
-          minLines: 7,
-          maxLines: 12,
-          style: const TextStyle(fontSize: 13, height: 1.6),
-          decoration: const InputDecoration(
-            hintText:
-                '{\n  "bookSourceName": "我的授权书库",\n  "bookSourceUrl": "https://…"\n}',
-          ),
-        ),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 14),
-            child: Text(
-              _error!,
-              key: const Key('source-error'),
-              style: const TextStyle(color: Color(0xFFB54444), height: 1.7),
-            ),
-          ),
-        const SizedBox(height: 20),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton(
-            onPressed: _busy
-                ? null
-                : () async {
-                    setState(() {
-                      _busy = true;
-                      _error = null;
-                    });
-                    try {
-                      final count = await widget.controller.importSources(
-                        _text.text,
-                      );
-                      if (context.mounted) {
-                        Navigator.pop(context);
-                        showMessage(context, '已导入 $count 个书源。可以到“发现”中搜索。');
-                      }
-                    } catch (error) {
-                      if (mounted) {
-                        setState(() {
-                          _error = errorMessage(error);
-                          _busy = false;
-                        });
-                      }
-                    }
-                  },
-            child: Text(_busy ? '校验并保存…' : '校验并导入'),
-          ),
-        ),
-      ],
-    ),
-  );
 }

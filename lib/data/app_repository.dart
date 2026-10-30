@@ -3,6 +3,7 @@ import 'package:sembast/sembast.dart';
 import '../domain/book.dart';
 import '../domain/book_source.dart';
 import '../domain/reader_settings.dart';
+import '../domain/source_import.dart';
 import 'sample_catalog.dart';
 
 class AppRepository {
@@ -12,6 +13,7 @@ class AppRepository {
   final _books = stringMapStoreFactory.store('books');
   final _notes = stringMapStoreFactory.store('bookmarks');
   final _sources = stringMapStoreFactory.store('sources');
+  final _sourceStates = stringMapStoreFactory.store('source_state');
   final _meta = stringMapStoreFactory.store('meta');
 
   Future<void> initialize() async {
@@ -117,6 +119,60 @@ class AppRepository {
     });
   }
 
+  Future<SourceImportCommitResult> commitSourceImport(
+    SourceImportPreview preview, {
+    Set<String>? selectedSourceIds,
+  }) async {
+    final selected =
+        selectedSourceIds ?? {for (final source in preview.sources) source.id};
+    var added = 0;
+    var updated = 0;
+    final committed = <String>[];
+    await database.transaction((transaction) async {
+      for (final source in preview.sources) {
+        if (!selected.contains(source.id)) continue;
+        final record = _sources.record(source.id);
+        final existing = await record.get(transaction);
+        final json = source.toJson();
+        if (existing == null) {
+          added++;
+        } else {
+          updated++;
+          final localEnabled = existing['enabled'];
+          if (localEnabled is bool) json['enabled'] = localEnabled;
+        }
+        await record.put(transaction, json);
+        await _sourceStates
+            .record(source.id)
+            .put(
+              transaction,
+              SourceImportState(
+                sourceId: source.id,
+                kind: preview.provenance.kind,
+                label: preview.provenance.label,
+                requestedUri: preview.provenance.requestedUri,
+                finalUri: preview.provenance.finalUri,
+                responseBytes: preview.provenance.responseBytes,
+                contentType: preview.provenance.contentType,
+              ).toJson(),
+            );
+        committed.add(source.id);
+      }
+    });
+    return SourceImportCommitResult(
+      added: added,
+      updated: updated,
+      sourceIds: committed,
+    );
+  }
+
+  Future<SourceImportState?> sourceState(String id) async {
+    final json = await _sourceStates.record(id).get(database);
+    return json == null
+        ? null
+        : SourceImportState.fromJson(Map<String, dynamic>.from(json));
+  }
+
   Future<void> saveSource(BookSource source) => saveSources([source]);
 
   Future<void> setSourceEnabled(String id, bool enabled) async {
@@ -124,6 +180,9 @@ class AppRepository {
   }
 
   Future<void> deleteSource(String id) async {
-    await _sources.record(id).delete(database);
+    await database.transaction((transaction) async {
+      await _sources.record(id).delete(transaction);
+      await _sourceStates.record(id).delete(transaction);
+    });
   }
 }
