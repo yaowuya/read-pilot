@@ -183,6 +183,35 @@ class Book {
     finished: finished ?? this.finished,
   );
 
+  /// Rebinds a shelf record to a loaded remote result while preserving user state.
+  /// Requires a remote replacement with a book URL; owns an immutable chapter copy.
+  Book rebindSource(Book replacement, {required ReadingPosition position}) {
+    if (!replacement.isRemote || replacement.url == null) {
+      throw ArgumentError.value(replacement, 'replacement', 'must be remote');
+    }
+    return Book._(
+      id: id,
+      title: replacement.title.isEmpty ? title : replacement.title,
+      author: replacement.author.isEmpty ? author : replacement.author,
+      description: replacement.description.isEmpty
+          ? description
+          : replacement.description,
+      category: replacement.category,
+      coverStyle: coverStyle,
+      sourceLabel: replacement.sourceLabel,
+      addedAt: addedAt,
+      isExcerpt: replacement.isExcerpt,
+      provenance: replacement.provenance,
+      sourceId: replacement.sourceId,
+      url: replacement.url,
+      coverUrl: replacement.coverUrl ?? coverUrl,
+      chapters: List<Chapter>.unmodifiable(replacement.chapters),
+      position: position,
+      lastOpenedAt: lastOpenedAt,
+      finished: finished,
+    );
+  }
+
   factory Book.fromJson(Map<String, dynamic> json) => Book(
     id: json['id'] as String,
     title: json['title'] as String,
@@ -248,6 +277,20 @@ class Bookmark {
   final String quote;
   final String note;
   final DateTime createdAt;
+
+  /// Moves only the logical anchor, preserving identity, quote, note, and date.
+  Bookmark copyWithPosition({
+    required int chapterIndex,
+    required int paragraphIndex,
+  }) => Bookmark(
+    id: id,
+    bookId: bookId,
+    chapterIndex: chapterIndex,
+    paragraphIndex: paragraphIndex,
+    quote: quote,
+    note: note,
+    createdAt: createdAt,
+  );
 
   factory Bookmark.fromJson(Map<String, dynamic> json) => Bookmark(
     id: json['id'] as String,

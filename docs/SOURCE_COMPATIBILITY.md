@@ -14,22 +14,23 @@
 ## 参考基线
 
 - `HapeLee/legado-with-MD3`
-- commit `d5f4bebb8ddc1e84a590cce0ceaf566481c3c0e7`
+- commit `b21025d3769ec9c4028514914f3c555a1ba284b8`
 - GPL-3.0，仅用于互操作规格研究；实现边界见 [CLEAN_ROOM.md](CLEAN_ROOM.md)。
 
-## 当前实现（2026-10-30）
+## 当前实现（2026-10-31）
 
 | 能力 | Android | Web | 说明 |
 | --- | --- | --- | --- |
 | object/array、0–4 类型、未知字段保留 | 已实现 | 已实现 | 导入最多 500 个源，原始 JSON 可往返 |
-| string/object header | 已实现 | 受浏览器限制 | CR/LF、hop-by-hop header 在联网前拒绝；预览只显示名称 |
-| URL 导入 | 已验证 | 受 CORS/混合内容限制 | paste/file/URL 共用有界解析；预览后选择并原子提交 |
+| string/object header | 已实现 | 受浏览器限制 | CR/LF、hop-by-hop header 在联网前拒绝 |
+| URL 导入 | 已验证 | 受 CORS/混合内容限制 | paste/file/URL 共用有界解析；一次确认后校验并原子提交，无预览列表 |
 | GET/POST/HEAD、form/JSON/raw | 已实现 | 依浏览器 transport | source → 默认 UA → URL options 合并 |
 | UTF-8/GBK 请求与响应 | 已实现 | 已实现 | GBK 仅用 whole-buffer codec；未知 charset 明确拒绝 |
 | CSS 与 legacy | 已实现子集 | 已实现子集 | CSS、`class.*`、`id.*`、`tag.*`、bare `text/href`、`text.文本@属性` |
 | XPath | 安全子集 | 安全子集 | 普通 HTML 上支持元素路径、属性等值/contains、位置、`text()` 与属性；复杂 XPath 仍诊断为未完整兼容 |
 | JSONPath | RFC 9535 已实现 | RFC 9535 已实现 | 使用 `json_path`；正则函数因不可终止风险而拒绝 |
-| regex/组合/变量 | 部分 | 部分 | 有界替换和 `||` fallback；`&&`、`%%`、put/get 未在公开文档确认语义，保持 blocked |
+| regex/组合/变量 | 部分 | 部分 | 安全 `ruleContent.replaceRegex` 支持单条 `正则##替换文本`；提取字段的有界替换和 `||` fallback 保留；`&&`、`%%`、put/get 未在公开文档确认语义，保持 blocked |
+| 正文段落 | 已实现 | 已实现 | 逻辑段落首行两字几何缩进；续页不重复缩进；HTML `br`/常见实体边界、空段、首部重复章名与相邻重复段安全归一；不默认自动重分段 |
 | 搜索/发现/详情/目录/正文 | 已实现 | 安全子集 | 发现分类、分页、循环检测、去重、取消；跨来源搜索并发上限 4 |
 | 目录/正文分页 | 已实现 | 已实现 | 每次最多 10 页；目录最多 10,000 章，不静默截断 |
 | JavaScript | **Android 已验证** | **禁止** | `jsf`/QuickJS disposable worker；250 ms、16 MiB heap、512 KiB stack；无 fetch/Java/Packages/process/require |
@@ -37,7 +38,7 @@
 
 ## 安全硬上限
 
-- 导入：1 MiB、最多 500 个源、JSON 深度 64。
+- 导入：10 MiB、最多 500 个源、JSON 深度 64。
 - 单请求：15 秒、4 次跳转、响应 2 MiB。
 - workflow：目录/正文各最多 10 页；跨来源搜索并发 4。
 - DOM：50,000 节点、深度 128；目录 10,000 个唯一章节。

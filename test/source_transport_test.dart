@@ -45,6 +45,32 @@ void main() {
     },
   );
 
+  test('returns binary bytes without applying charset decoding', () async {
+    final transport = SourceTransport(
+      client: MockClient(
+        (_) async => http.Response.bytes(
+          const [0x89, 0x50, 0x4e, 0x47, 0xff],
+          200,
+          headers: {'content-type': 'image/png'},
+        ),
+      ),
+    );
+    addTearDown(transport.close);
+
+    final response = await transport.execute(
+      RequestPlan(
+        uri: Uri.parse('https://books.example/cover.png'),
+        method: 'GET',
+        headers: const {},
+      ),
+      policy: SourceNetworkPolicy(allowedOrigins: {'https://books.example'}),
+      decodeText: false,
+    );
+
+    expect(response.bytes, const [0x89, 0x50, 0x4e, 0x47, 0xff]);
+    expect(response.text, isEmpty);
+  });
+
   test(
     'converts POST to GET and strips secrets on a granted 302 redirect',
     () async {

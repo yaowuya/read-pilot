@@ -20,6 +20,28 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('the in-app mark uses the finalized launcher artwork', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Center(child: BrandMark())),
+    );
+    final image = find.descendant(
+      of: find.byType(BrandMark),
+      matching: find.byType(Image),
+    );
+    expect(image, findsOneWidget);
+    expect(
+      tester.widget<Image>(image).image,
+      isA<AssetImage>().having(
+        (asset) => asset.assetName,
+        'assetName',
+        'assets/branding/icon-master.png',
+      ),
+    );
+    expect(find.bySemanticsLabel('阅读标志'), findsOneWidget);
+  });
+
   test('the interface preserves the original blue and cool-gray palette', () {
     expect(AppColors.ink, const Color(0xFF252932));
     expect(AppColors.blue, const Color(0xFF2468DE));

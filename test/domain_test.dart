@@ -129,10 +129,20 @@ void main() {
       'fontSize': 999,
       'lineHeight': 0.1,
       'theme': 'not-a-theme',
+      'flow': 'not-a-flow',
     });
     expect(settings.fontSize, 32);
     expect(settings.lineHeight, 1.4);
     expect(settings.theme, ReaderTheme.paper);
+    expect(settings.flow, ReaderFlow.paged);
+
+    final scrolling = const ReaderSettings().copyWith(
+      flow: ReaderFlow.scrolling,
+    );
+    expect(
+      ReaderSettings.fromJson(scrolling.toJson()).flow,
+      ReaderFlow.scrolling,
+    );
   });
 
   test('bookmark preserves an exact logical anchor and note', () {

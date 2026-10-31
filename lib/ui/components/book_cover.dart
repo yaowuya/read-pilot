@@ -1,15 +1,110 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../../domain/book.dart';
 
-class BookCover extends StatelessWidget {
+/// Displays a safely loaded cover image with the existing generated fallback.
+class BookCover extends StatefulWidget {
   const BookCover({
     super.key,
     required this.book,
+    this.imageLoader,
     this.width = 120,
     this.height = 164,
   });
+
+  final Book book;
+  final Future<Uint8List?> Function(Book book)? imageLoader;
+  final double width;
+  final double height;
+
+  @override
+  State<BookCover> createState() => _BookCoverState();
+}
+
+class _BookCoverState extends State<BookCover> {
+  Future<Uint8List?>? _image;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void didUpdateWidget(covariant BookCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.book != widget.book ||
+        oldWidget.book.coverUrl != widget.book.coverUrl ||
+        oldWidget.book.sourceId != widget.book.sourceId ||
+        oldWidget.imageLoader != widget.imageLoader) {
+      _reload();
+    }
+  }
+
+  void _reload() {
+    _image = widget.book.coverUrl == null || widget.imageLoader == null
+        ? null
+        : widget.imageLoader!(widget.book);
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    excludeSemantics: true,
+    label: '${widget.book.title}封面',
+    image: true,
+    child: ClipRRect(
+      borderRadius: const BorderRadius.only(
+        topRight: Radius.circular(5),
+        bottomRight: Radius.circular(5),
+      ),
+      child: SizedBox(
+        width: widget.width,
+        height: widget.height,
+        child: _image == null
+            ? _generated()
+            : FutureBuilder<Uint8List?>(
+                future: _image,
+                builder: (context, snapshot) {
+                  final bytes = snapshot.data;
+                  if (snapshot.connectionState == ConnectionState.done &&
+                      bytes != null &&
+                      bytes.isNotEmpty) {
+                    return Image.memory(
+                      bytes,
+                      key: const Key('book-cover-image'),
+                      width: widget.width,
+                      height: widget.height,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => _generated(),
+                    );
+                  }
+                  return _generated();
+                },
+              ),
+      ),
+    ),
+  );
+
+  Widget _generated() => _GeneratedCover(
+    key: const Key('book-cover-generated'),
+    book: widget.book,
+    width: widget.width,
+    height: widget.height,
+  );
+}
+
+class _GeneratedCover extends StatelessWidget {
+  const _GeneratedCover({
+    super.key,
+    required this.book,
+    required this.width,
+    required this.height,
+  });
+
   final Book book;
   final double width;
   final double height;
@@ -34,83 +129,67 @@ class BookCover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final index = book.coverStyle % _grounds.length;
-    return Semantics(
-      container: true,
-      excludeSemantics: true,
-      label: '${book.title}封面',
-      image: true,
-      child: ClipRRect(
-        borderRadius: const BorderRadius.only(
-          topRight: Radius.circular(5),
-          bottomRight: Radius.circular(5),
-        ),
-        child: SizedBox(
-          width: width,
-          height: height,
-          child: ColoredBox(
-            color: _grounds[index],
-            child: Stack(
+    return ColoredBox(
+      color: _grounds[index],
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(painter: _CoverArt(index, _inks[index])),
+          ),
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 5,
+            child: ColoredBox(color: _inks[index].withValues(alpha: .12)),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              width * .13,
+              height * .12,
+              width * .1,
+              height * .1,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Positioned.fill(
-                  child: CustomPaint(painter: _CoverArt(index, _inks[index])),
-                ),
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: 5,
-                  child: ColoredBox(color: _inks[index].withValues(alpha: .12)),
-                ),
-                Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    width * .13,
-                    height * .12,
-                    width * .1,
-                    height * .1,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        book.title,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontFamily: 'NotoSansSC',
-                          fontSize: width * .16,
-                          height: 1.45,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 2,
-                          color: _inks[index],
-                        ),
-                      ),
-                      SizedBox(height: height * .04),
-                      Text(
-                        book.author,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: math.max(9, width * .065),
-                          color: _inks[index].withValues(alpha: .9),
-                        ),
-                      ),
-                      const Spacer(),
-                      if (width >= 90)
-                        Text(
-                          book.isExcerpt ? '公版 · 节选' : '阅读',
-                          style: TextStyle(
-                            fontSize: 10,
-                            letterSpacing: 1,
-                            color: _inks[index].withValues(alpha: .8),
-                          ),
-                        ),
-                    ],
+                Text(
+                  book.title,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'NotoSansSC',
+                    fontSize: width * .16,
+                    height: 1.45,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 2,
+                    color: _inks[index],
                   ),
                 ),
+                SizedBox(height: height * .04),
+                Text(
+                  book.author,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: math.max(9, width * .065),
+                    color: _inks[index].withValues(alpha: .9),
+                  ),
+                ),
+                const Spacer(),
+                if (width >= 90)
+                  Text(
+                    book.isExcerpt ? '公版 · 节选' : '阅读',
+                    style: TextStyle(
+                      fontSize: 10,
+                      letterSpacing: 1,
+                      color: _inks[index].withValues(alpha: .8),
+                    ),
+                  ),
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }

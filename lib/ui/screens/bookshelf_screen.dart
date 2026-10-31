@@ -96,6 +96,7 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                 if (recent != null && _query.isEmpty && _filter == 0) ...[
                   _ContinueReading(
                     book: recent,
+                    controller: widget.controller,
                     compact: compact,
                     onOpen: () => widget.onOpen(recent),
                   ),
@@ -214,7 +215,12 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                       onTap: () => widget.onOpen(book),
                       child: Row(
                         children: [
-                          BookCover(book: book, width: 56, height: 78),
+                          BookCover(
+                            book: book,
+                            imageLoader: widget.controller.loadBookCover,
+                            width: 56,
+                            height: 78,
+                          ),
                           const SizedBox(width: 18),
                           Expanded(
                             child: Column(
@@ -267,6 +273,7 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                         borderRadius: BorderRadius.circular(5),
                         child: BookCover(
                           book: book,
+                          imageLoader: widget.controller.loadBookCover,
                           width: coverWidth,
                           height: coverWidth * 1.4,
                         ),
@@ -374,10 +381,12 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
 class _ContinueReading extends StatelessWidget {
   const _ContinueReading({
     required this.book,
+    required this.controller,
     required this.compact,
     required this.onOpen,
   });
   final Book book;
+  final AppController controller;
   final bool compact;
   final VoidCallback onOpen;
   @override
@@ -387,6 +396,7 @@ class _ContinueReading extends StatelessWidget {
       children: [
         BookCover(
           book: book,
+          imageLoader: controller.loadBookCover,
           width: compact ? 78 : 104,
           height: compact ? 110 : 146,
         ),

@@ -34,6 +34,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/books/
+    - assets/branding/icon-master.png
     - assets/fonts/OFL.txt
   fonts:
     - family: NotoSansSC

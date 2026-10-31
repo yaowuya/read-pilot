@@ -13,7 +13,7 @@
 - SDK location is `D:\ProgramFiles\flutter`.
 - No routine product/technical questions and no automatic commits or pushes.
 - No copied WeRead branding, proprietary book content, or translated upstream Kotlin implementation.
-- UTF-8/UTF-16 TXT limit 2 MiB. Source JSON limit 1 MiB. HTTP text response limit 2 MiB; request timeout 15 seconds; redirect cap 4.
+- UTF-8/UTF-16 TXT limit 2 MiB. Source JSON limit 10 MiB. HTTP text response limit 2 MiB; request timeout 15 seconds; redirect cap 4.
 - HTTP(S) GET + UTF-8 + explicit CSS rules only. Unsupported executable or advanced parsing fields are reported before import.
 - All success claims require fresh verification output. Record missing native SDK/toolchain limitations accurately.
 

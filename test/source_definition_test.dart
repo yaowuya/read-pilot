@@ -347,6 +347,26 @@ void main() {
     );
   });
 
+  test('recognizes safe content replacement rules as executable', () {
+    final replacement = SourceDefinition.fromJson(
+      _source()
+        ..['ruleContent'] = {
+          'content': '@CSS:article@text',
+          'replaceRegex': r'广告词##',
+        },
+    );
+    final diagnostic = replacement
+        .capabilitiesFor(SourceRuntimeProfile.nativeCore)
+        .diagnostics
+        .singleWhere(
+          (item) =>
+              item.path == 'ruleContent.replaceRegex' &&
+              item.capability == SourceCapability.regex,
+        );
+
+    expect(diagnostic.runtimeImplemented, isTrue);
+  });
+
   test('keeps regex blocked outside extraction fields', () {
     final selection = SourceDefinition.fromJson(
       _source(
@@ -361,7 +381,7 @@ void main() {
       _source()
         ..['ruleContent'] = {
           'content': '@CSS:article@text',
-          'replaceRegex': r'x##a+##b',
+          'replaceRegex': r'.*##b',
         },
     );
 

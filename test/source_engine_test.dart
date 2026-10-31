@@ -71,6 +71,17 @@ class _EngineScriptRuntime extends SandboxedScriptRuntime {
 void main() {
   final importer = SourceImporter();
 
+  test('accepts an empty review-rule array while preserving raw JSON', () {
+    final raw = sourceJson()..['ruleReview'] = <dynamic>[];
+    final source = importer.parse(jsonEncode(raw)).single;
+    expect(source.toJson()['ruleReview'], isEmpty);
+    expect(source.searchUrl, isNotEmpty);
+    expect(
+      () => importer.parse(jsonEncode(sourceJson()..['ruleReview'] = ['rule'])),
+      throwsFormatException,
+    );
+  });
+
   test('imports JSON arrays and JSON-encoded nested rules', () {
     final raw = sourceJson();
     raw['ruleSearch'] = jsonEncode(raw['ruleSearch']);
@@ -292,6 +303,158 @@ void main() {
       'result': '原始正文广告',
     });
   });
+
+  test('normalizes chapter layout after content extraction', () async {
+    final engine = SourceEngine(
+      client: MockClient(
+        (_) async => http.Response(
+          '<article><p>第一章</p><p>正文&nbsp; 内容</p>'
+          '<p>正文&nbsp; 内容</p><p>广告也是故事的一部分</p></article>',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        ),
+      ),
+    );
+    addTearDown(engine.close);
+    final source = importer.parse(jsonEncode(sourceJson())).single;
+
+    final chapter = await engine.loadChapter(
+      source,
+      Chapter(
+        id: 'chapter-normalized',
+        title: '第一章',
+        url: 'https://books.example/chapter/normalized',
+      ),
+    );
+
+    expect(chapter.paragraphs, ['正文 内容', '广告也是故事的一部分']);
+  });
+
+  test('refreshes book info and loads a same-origin image cover', () async {
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        if (request.url.path == '/cover.png') {
+          return http.Response.bytes(
+            const [0x89, 0x50, 0x4e, 0x47],
+            200,
+            headers: {'content-type': 'image/png'},
+          );
+        }
+        return http.Response(
+          '<h1>刷新书名</h1><div id="info"><a>刷新作者</a></div>'
+          '<p class="intro">刷新简介</p><img class="cover" src="/cover.png">',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson();
+    (raw['ruleBookInfo'] as Map)['coverUrl'] = '@CSS:.cover@src';
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final refreshed = await engine.refreshBookInfo(source, bookResult());
+    expect(refreshed.title, '刷新书名');
+    expect(refreshed.coverUrl, 'https://books.example/cover.png');
+    expect(await engine.loadCover(source, refreshed.coverUrl!), const [
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+    ]);
+  });
+
+  test('rejects a non-image cover response', () async {
+    final engine = SourceEngine(
+      client: MockClient(
+        (_) async => http.Response(
+          '<html>not an image</html>',
+          200,
+          headers: {'content-type': 'text/html'},
+        ),
+      ),
+    );
+    addTearDown(engine.close);
+    final source = importer.parse(jsonEncode(sourceJson())).single;
+
+    await expectLater(
+      engine.loadCover(source, 'https://books.example/cover.png'),
+      throwsA(
+        isA<SourceException>().having(
+          (error) => error.message,
+          'message',
+          contains('图片'),
+        ),
+      ),
+    );
+  });
+
+  test(
+    'applies a bounded content replacement before paragraph normalization',
+    () async {
+      final engine = SourceEngine(
+        client: MockClient(
+          (_) async => http.Response(
+            '<article><p>第一章</p><p>正文 广告词</p><p>第二段</p></article>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          ),
+        ),
+      );
+      addTearDown(engine.close);
+      final raw = sourceJson()
+        ..['ruleContent'] = {
+          'content': '@CSS:article@html',
+          'replaceRegex': r'广告词##',
+        };
+      final source = importer.parse(jsonEncode(raw)).single;
+
+      final chapter = await engine.loadChapter(
+        source,
+        Chapter(
+          id: 'chapter-replaced',
+          title: '第一章',
+          url: 'https://books.example/chapter/replaced',
+        ),
+      );
+
+      expect(chapter.paragraphs, ['正文', '第二段']);
+    },
+  );
+
+  test(
+    'rejects an unsafe content replacement before writing a chapter',
+    () async {
+      final engine = SourceEngine(
+        client: MockClient((_) async => http.Response('正文', 200)),
+      );
+      addTearDown(engine.close);
+      final raw = sourceJson()
+        ..['ruleContent'] = {
+          'content': '@CSS:article@text',
+          'replaceRegex': r'.*##',
+        };
+      final source = importer.parse(jsonEncode(raw)).single;
+
+      await expectLater(
+        engine.loadChapter(
+          source,
+          Chapter(
+            id: 'chapter-unsafe-replacement',
+            title: '第一章',
+            url: 'https://books.example/chapter/unsafe-replacement',
+          ),
+        ),
+        throwsA(
+          isA<SourceException>().having(
+            (error) => error.message,
+            'message',
+            contains('replaceRegex'),
+          ),
+        ),
+      );
+    },
+  );
 
   test('parses explore categories and loads a selected page', () async {
     late Uri requested;

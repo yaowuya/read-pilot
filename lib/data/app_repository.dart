@@ -50,30 +50,125 @@ class AppRepository {
     });
   }
 
+  /// Updates progress atomically without replacing content or recreating a book.
+  /// With expectedBook, rejects a missing or changed source/URL/TOC slot via StateError.
+  /// Without it, legacy writes to missing records remain no-ops. Storage errors propagate.
   Future<void> savePosition(
     String id,
     ReadingPosition position, {
     bool? finished,
+    Book? expectedBook,
   }) async {
-    // 迟到的进度写入不能重新创建已被删除的书籍。
-    await _books.record(id).update(database, {
-      'position': position.toJson(),
-      'lastOpenedAt': DateTime.now().toIso8601String(),
-      'finished': ?finished,
+    await database.transaction((transaction) async {
+      final record = _books.record(id);
+      final json = await record.get(transaction);
+      if (json == null) {
+        if (expectedBook != null) throw StateError('书籍已移除，阅读进度未保存。');
+        return;
+      }
+      if (expectedBook != null) {
+        // Only inspect binding metadata; progress saves must not clone cached text.
+        final index = position.chapterIndex;
+        final chapters = json['chapters'] as List? ?? const [];
+        if (expectedBook.id != id ||
+            json['sourceId'] != expectedBook.sourceId ||
+            json['url'] != expectedBook.url ||
+            index < 0 ||
+            index >= expectedBook.chapters.length ||
+            index >= chapters.length ||
+            (chapters[index] as Map)['id'] != expectedBook.chapters[index].id) {
+          throw StateError('书籍来源或章节已变化，旧阅读进度未应用到当前书籍。');
+        }
+      }
+      await record.update(transaction, {
+        'position': position.toJson(),
+        'lastOpenedAt': DateTime.now().toIso8601String(),
+        'finished': ?finished,
+      });
     });
   }
 
-  Future<void> cacheChapter(String bookId, int index, Chapter chapter) async {
-    // 下载期间进度可能已更新，必须在事务中合并最新记录而非下载前快照。
+  /// Changes only the cover of an existing, still-bound book.
+  /// Returns null without writing if removed/rebound; storage errors propagate.
+  Future<Book?> updateBookCover(
+    String bookId,
+    String coverUrl, {
+    required String? expectedSourceId,
+  }) => database.transaction((transaction) async {
+    final json = await _books.record(bookId).get(transaction);
+    if (json == null) return null;
+    final current = Book.fromJson(Map<String, dynamic>.from(json));
+    if (current.sourceId != expectedSourceId) return null;
+    final updated = current.copyWith(coverUrl: coverUrl);
+    await _books.record(bookId).put(transaction, updated.toJson());
+    return updated;
+  });
+
+  /// Replaces one existing source binding and its note positions atomically.
+  /// Optional source/position expectations reject stale plans before writing.
+  /// Any failure rolls back both; note text edits and deletions are preserved.
+  Future<void> replaceBookSource(
+    Book book,
+    Iterable<Bookmark> bookmarks, {
+    String? expectedSourceId,
+    ReadingPosition? expectedPosition,
+  }) async {
     await database.transaction((transaction) async {
+      final existing = await _books.record(book.id).get(transaction);
+      if (existing == null) throw StateError('书籍已移除，未执行换源。');
+      final current = Book.fromJson(Map<String, dynamic>.from(existing));
+      if (expectedSourceId != null && current.sourceId != expectedSourceId) {
+        throw StateError('书籍来源已变化，请重新选择书源。');
+      }
+      if (expectedPosition != null &&
+          (current.position.chapterIndex != expectedPosition.chapterIndex ||
+              current.position.paragraphIndex !=
+                  expectedPosition.paragraphIndex)) {
+        throw StateError('阅读位置已变化，请重试换源。');
+      }
+      await _books.record(book.id).put(transaction, book.toJson());
+      for (final bookmark in bookmarks) {
+        if (bookmark.bookId != book.id) {
+          throw ArgumentError.value(
+            bookmark.bookId,
+            'bookmarks',
+            'must belong to ${book.id}',
+          );
+        }
+        // Only move anchors; concurrent note text edits and deletions stay authoritative.
+        await _notes.record(bookmark.id).update(transaction, {
+          'chapterIndex': bookmark.chapterIndex,
+          'paragraphIndex': bookmark.paragraphIndex,
+        });
+      }
+    });
+  }
+
+  /// Caches a chapter only while its original source and TOC slot still match.
+  /// Merges the latest record; false means stale/removed and no write occurred.
+  /// True means the cache write committed; storage errors propagate.
+  Future<bool> cacheChapter(
+    String bookId,
+    int index,
+    Chapter chapter, {
+    required String expectedSourceId,
+    required String expectedChapterId,
+  }) async {
+    // A download started before a source switch must not contaminate the new TOC.
+    return database.transaction((transaction) async {
       final json = await _books.record(bookId).get(transaction);
-      if (json == null) return;
+      if (json == null) return false;
       final book = Book.fromJson(Map<String, dynamic>.from(json));
-      if (index < 0 || index >= book.chapters.length) return;
+      if (index < 0 || index >= book.chapters.length) return false;
+      if (book.sourceId != expectedSourceId ||
+          book.chapters[index].id != expectedChapterId) {
+        return false;
+      }
       final chapters = [...book.chapters]..[index] = chapter;
       await _books
           .record(bookId)
           .put(transaction, book.copyWith(chapters: chapters).toJson());
+      return true;
     });
   }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html;
@@ -8,6 +9,8 @@ import 'package:http/http.dart' as http;
 import '../domain/book.dart';
 import '../domain/book_source.dart';
 import 'source_importer.dart';
+import 'source_runtime/content_normalizer.dart';
+import 'source_runtime/content_replacement.dart';
 import 'source_runtime/request_plan.dart';
 import 'source_runtime/request_planner.dart';
 import 'source_runtime/rule_interpreter.dart';
@@ -170,19 +173,63 @@ class SourceEngine {
     return books.values.toList();
   }
 
+  /// Refreshes descriptive fields without loading or replacing the chapter list.
+  Future<Book> refreshBookInfo(BookSource source, Book result) async =>
+      (await _loadBookInfo(source, result)).book;
+
+  /// Loads a same-origin image through the source transport security policy.
+  Future<Uint8List> loadCover(
+    BookSource source,
+    String coverUrl, {
+    Future<void>? abortTrigger,
+  }) async {
+    final declared = Uri.tryParse(source.id);
+    final requested = declared == null ? null : _link(declared, coverUrl);
+    if (declared == null || requested == null) {
+      throw const SourceException('封面地址必须是与书源同源的 HTTP(S) 链接。');
+    }
+    try {
+      final response = await _transport.execute(
+        _planner.plan(source, requested.toString()),
+        policy: SourceNetworkPolicy(allowedOrigins: {declared.origin}),
+        abortTrigger: abortTrigger,
+        decodeText: false,
+      );
+      final mediaType = response.headers['content-type']
+          ?.split(';')
+          .first
+          .trim()
+          .toLowerCase();
+      if (response.bytes.isEmpty || mediaType?.startsWith('image/') != true) {
+        throw const SourceException('书源封面响应不是有效的图片。');
+      }
+      return Uint8List.fromList(response.bytes);
+    } on SourceException {
+      rethrow;
+    } on SourceRuntimeException catch (error) {
+      throw SourceException(error.message);
+    } on SourceTransportException catch (error) {
+      throw SourceException(error.message);
+    } on FormatException {
+      throw const SourceException('封面请求地址或选项格式无效。');
+    }
+  }
+
   Future<Book> loadBook(BookSource source, Book result) async {
-    if (result.url == null) throw const SourceException('这本书没有可用的详情地址。');
+    final info = await _loadBookInfo(source, result);
     final tocRules = source.tocRules;
     _requireRules(tocRules, 'ruleToc', const [
       'chapterList',
       'chapterName',
       'chapterUrl',
     ]);
-    final detail = await _fetch(source, result.url!);
-    final info = source.infoRules;
-    final root = _ruleRoot(detail.body, info.values);
-    final tocLink = _interpreter.extractFirst(root, info['tocUrl']);
-    final tocUri = tocLink.isEmpty ? detail.url : _link(detail.url, tocLink);
+    final tocLink = _interpreter.extractFirst(
+      info.root,
+      source.infoRules['tocUrl'],
+    );
+    final tocUri = tocLink.isEmpty
+        ? info.detail.url
+        : _link(info.detail.url, tocLink);
     if (tocUri == null) throw const SourceException('目录地址不是有效的 HTTP(S) 链接。');
     final chapters = <String, Chapter>{};
     final visitedTocPages = <String>{};
@@ -192,8 +239,8 @@ class SourceEngine {
       if (page >= _maxTocPages) {
         throw const SourceException('目录分页超过 $_maxTocPages 页，已停止读取。');
       }
-      final toc = nextTocUri == detail.url
-          ? detail
+      final toc = nextTocUri == info.detail.url
+          ? info.detail
           : await _fetch(source, nextTocUri.toString());
       final tocRoot = _ruleRoot(toc.body, tocRules.values);
       for (final element in _interpreter.select(
@@ -232,18 +279,33 @@ class SourceEngine {
     if (chapters.isEmpty) {
       throw const SourceException('没有解析到章节。请检查书源目录规则或网站是否需要登录。');
     }
-    final title = _interpreter.extractFirst(root, info['name']);
-    final author = _interpreter.extractFirst(root, info['author']);
-    final intro = _interpreter.extract(root, info['intro']);
-    return result.copyWith(
-      title: title.isEmpty ? null : title,
-      author: author.isEmpty ? null : author,
-      description: intro.isEmpty ? null : intro,
-      coverUrl: _link(
-        detail.url,
-        _interpreter.extractFirst(root, info['coverUrl']),
-      )?.toString(),
-      chapters: chapters.values.toList(),
+    return info.book.copyWith(chapters: chapters.values.toList());
+  }
+
+  Future<({Book book, _Page detail, RuleNode root})> _loadBookInfo(
+    BookSource source,
+    Book result,
+  ) async {
+    if (result.url == null) throw const SourceException('这本书没有可用的详情地址。');
+    final detail = await _fetch(source, result.url!);
+    final rules = source.infoRules;
+    final root = _ruleRoot(detail.body, rules.values);
+    final title = _interpreter.extractFirst(root, rules['name']);
+    final author = _interpreter.extractFirst(root, rules['author']);
+    final intro = _interpreter.extract(root, rules['intro']);
+    final coverUrl = _link(
+      detail.url,
+      _interpreter.extractFirst(root, rules['coverUrl']),
+    )?.toString();
+    return (
+      book: result.copyWith(
+        title: title.isEmpty ? null : title,
+        author: author.isEmpty ? null : author,
+        description: intro.isEmpty ? null : intro,
+        coverUrl: coverUrl,
+      ),
+      detail: detail,
+      root: root,
     );
   }
 
@@ -251,6 +313,12 @@ class SourceEngine {
     if (chapter.url == null) throw const SourceException('章节没有正文地址。');
     final rules = source.contentRules;
     final contentRule = _requiredRule(rules, 'ruleContent', 'content');
+    final replacement = rules['replaceRegex'];
+    if (replacement != null &&
+        replacement.trim().isNotEmpty &&
+        !ContentReplacement.isSupported(replacement)) {
+      throw const SourceException('replaceRegex 必须使用安全的“正则##替换文本”格式。');
+    }
     final nextRule = rules['nextContentUrl'];
     final isHtml = contentRule.toLowerCase().endsWith('@html');
     final paragraphs = <String>[];
@@ -296,14 +364,34 @@ class SourceEngine {
       nextUrl = nextUri.toString();
     }
 
-    if (paragraphs.isEmpty) {
+    final title = resolvedTitle.isEmpty ? chapter.title : resolvedTitle;
+    final replacementRule = rules['replaceRegex'];
+    final Iterable<String> replacementInput;
+    try {
+      replacementInput =
+          replacementRule == null || replacementRule.trim().isEmpty
+          ? paragraphs
+          : [
+              const ContentReplacement().apply(
+                paragraphs.join('\n'),
+                replacementRule,
+              ),
+            ];
+    } on FormatException catch (error) {
+      throw SourceException(error.message);
+    }
+    final normalized = const ContentNormalizer().normalize(
+      replacementInput,
+      chapterTitle: title,
+    );
+    if (normalized.isEmpty) {
       throw const SourceException('没有解析到正文。请检查规则；不支持需要脚本或付费解锁的章节。');
     }
     return Chapter(
       id: chapter.id,
-      title: resolvedTitle.isEmpty ? chapter.title : resolvedTitle,
+      title: title,
       url: chapter.url,
-      paragraphs: paragraphs,
+      paragraphs: normalized,
     );
   }
 

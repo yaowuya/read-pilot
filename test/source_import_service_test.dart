@@ -84,6 +84,33 @@ void main() {
     },
   );
 
+  test('accepts a URL import larger than the former 1 MiB limit', () async {
+    final payload = jsonEncode({
+      ..._sourceJson(name: '大型书源'),
+      'padding': 'x' * (1024 * 1024),
+    });
+    expect(utf8.encode(payload).length, greaterThan(1024 * 1024));
+
+    final service = SourceImportService(
+      client: MockClient(
+        (_) async => http.Response(
+          payload,
+          200,
+          headers: {'content-type': 'application/json'},
+        ),
+      ),
+    );
+    addTearDown(service.close);
+
+    final preview = await service.prepare(
+      SourceImportInput.url(
+        Uri.parse('https://feed.example/large-source.json'),
+      ),
+    );
+
+    expect(preview.sources.single.name, '大型书源');
+  });
+
   test(
     'rejects an HTML error page instead of parsing it as a source',
     () async {

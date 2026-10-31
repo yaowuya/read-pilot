@@ -2,6 +2,39 @@
 
 本记录基于实际命令、真实浏览器操作和已查看的截图，不将原生工程生成等同于原生应用验证。
 
+## 2026-10-31 本地提交前复核
+
+- 按已登记 Flutter/Dart 项目规范审查当前完整改动；本轮只授权本地 commit，不推送、不创建 PR、不归档，也不将本次局部审查当作 `fp-final-review`。没有新增项目规范或修改规范登记。
+- 正式红绿回归修复了换源时重复章名/正文/引用误跳第一处、预取后目标章节改变、迟到正文和进度污染新来源，以及阅读页未随来源绑定失效的问题。歧义锚点保留约束后的原索引，未验证的最终换源目标明确拒绝。
+- 阅读恢复回归覆盖迟到设置保存、旧来源进度拒绝、短视口滚动回退往返及系统文字放大；正文和章节标题采用一致测量策略。正文标题去重保留标点，替换限额错误提示改为准确的 UTF-16 单位。
+- 一步导入的原子保存阶段明确显示“正在保存书源…”并禁用取消；获取/准备阶段仍可取消且不进入持久化。新增控件回归先观察到保存阶段仍可取消，再修复转绿。
+- 当前快照：`dart format --output=none --set-exit-if-changed lib test integration_test` 检查 **81 个文件，0 修改**；`flutter analyze --no-pub` 为 **No issues found**；`flutter test --no-pub` **275 项全部通过**；Python 图标测试 **6/6 通过**。
+- 当前源码的 Web release 和 Android release 均构建成功。Android 保留既有 Java native-access 与 file_picker/KGP 未来兼容性警告；未修改依赖锁、全局权限或系统配置，81 个 Dart 文件在测试和两次构建后哈希未变。
+- 新构建 APK 位于 `build/app/outputs/flutter-apk/app-release.apk`，v2 签名、ZIP/CRC 及三个 ABI 的 app/Flutter/QuickJS 库检查通过；本轮未重新安装到模拟器。之前交付并安装的 `artifacts/releases/read-pilot-0.1.0-universal-release.apk` 保持原 SHA-256 `14c95edb1411e32687c1de9bb8b9d5f0a113afa052ea978f2b0a932035542289`，不能将其视为已包含本次审查修复。
+- 正式 Web 构建在独立 4175 origin 实测《浮生六记》点击翻页 1/15→2/15；375×250 自动退回滚动，实际滚动后恢复 375×812 显示 3/15，未回到旧分页控制器位置。[实际阅读截图](../artifacts/commit-checks/20261031-reader-mobile.jpg)留在本机；控制台无 error，网络无失败请求，临时预览与 launch 条目已清理。
+- 本次导入浏览器观察只确认单一“确认导入”入口、无效 JSON 错误保留弹层及来源数量仍为 0。文本输入适配未将测试 JSON 成功传入 Flutter 控制器，未记录为真实导入成功；取消/保存时序以正式控件回归为补充，不替代完整真实 E2E。
+- 真实双源换源、严格视觉参考及完整异常/时序 E2E 的历史 **BLOCKED** 保持不变；未进行第四次真实双源尝试，没有注入业务数据库或拦截请求伪造通过。日志、截图、APK、CodeGraph 索引与机器执行/恢复状态留在本机，不纳入提交。
+
+## 2026-10-31 目录顺序与排版偏好
+
+- 三项代码功能已落地：目录正序/倒序、0–40px段距、正文粗体；旧设置维持20px/普通字重/正序。章节原始顺序、内容锚点、书签和网络边界不变。
+- 新增红绿证据覆盖缺失字段、控件和目录入口，以及测量key/两种阅读流。测试还先捕获了“失败回退到弹层初始值”和“新Switch在已有装饰卡片内缺少Material绘制面”两项边界，再修复并转绿。
+- `dart format --output=none --set-exit-if-changed lib test integration_test`：81个文件，0修改；`flutter analyze --no-pub`：No issues found；`flutter test --no-pub`：**247项通过**。
+- Web release和Android debug构建成功。APK已使用`adb install -r`覆盖安装至`emulator-5556`并启动MainActivity，未清除本地数据；不将安装启动等同于三项功能的原生完整E2E。构建仍有现有Java native-access和file_picker/KGP未来兼容性警告，未为此修改依赖或系统设置。
+- 真实Web正式构建在375×812下观察到20→24px、粗体开关、重载保留、纸张/夜间、分页/滚动及倒序正确打开第2章；1440×1000下无根文档横向溢出，最终无console error或失败请求。测试使用独立4174 origin，通过正常UI恢复20px/普通字重/纸张/左右分页/正序，临时服务和配置已清理。
+- 严格UI生命周期仍**BLOCKED**：缺可信Figma/static reference，部分真实异常、时序及端点分支没有安全覆盖。未把运行截图当设计参考、未注入数据库或拦截业务数据，UI task checkbox保持未完成；不进入fp-final-review或归档。没有提交/推送，历史双源换源验收不变。
+- [提案](../fp-docs/changes/offline-reader-navigation/proposal.md)、[设计](../fp-docs/changes/offline-reader-navigation/design/frontend.md)、[唯一任务owner](../fp-docs/changes/offline-reader-navigation/tasks/plan-frontend.md)、[完整命令输出](../fp-docs/changes/offline-reader-navigation/.fp-execute/final-checks.txt)、[实际观察与清理](../fp-docs/changes/offline-reader-navigation/.fp-execute/runtime-observations.md)。
+- 实际截图：[设置](../fp-docs/changes/offline-reader-navigation/.fp-execute/visual/frontend-002/PREFS/current.png)、[纸张分页](../fp-docs/changes/offline-reader-navigation/.fp-execute/visual/frontend-003/LAYOUT/current.png)、[夜间滚动](../fp-docs/changes/offline-reader-navigation/.fp-execute/visual/frontend-003/LAYOUT/night-scrolling.png)、[倒序目录](../fp-docs/changes/offline-reader-navigation/.fp-execute/visual/frontend-004/TOC/current.png)。
+
+## 2026-10-31 段落与跨页连续排版
+
+- 红绿回归真实捕获旧分页器提前寻找标点造成的整行留白和行中断页；现按实际排版行分页，不为凑标点回退最多 24 字。原始缩进、英文单词、组合 emoji/重音字素、文字完整性、跨页不重缩进和恢复锚点均有覆盖。
+- 最终 `flutter test --no-pub`：**223 项通过**；`flutter analyze --no-pub`：**No issues found**；格式检查 78 个文件，0 修改。
+- Web release、Android debug 构建成功。新 APK 已覆盖安装至 `emulator-5556` 并启动，未清除本地书架或阅读记录。Gradle 仍有现有 Java native-access 和 file_picker/KGP 未来兼容性警告，不影响本次成功构建。
+- 正式 Web 构建在 375×812 下复核《浮生六记》连续第 3/4 页：总页数从 16 变为 15；同段文字继续填满实际可用行，下一页不增加缩进或段距，真实新段仍空两字；无控制台错误或失败请求。
+- [验证说明与红绿证据](../fp-docs/changes/reader-paging-source-switching/.fp-execute/visual/paragraph-layout/verification.md)、[原始命令输出](../fp-docs/changes/reader-paging-source-switching/.fp-execute/visual/paragraph-layout/checks.txt)、[第 3 页](../fp-docs/changes/reader-paging-source-switching/.fp-execute/visual/paragraph-layout/page-3.jpg)、[第 4 页](../fp-docs/changes/reader-paging-source-switching/.fp-execute/visual/paragraph-layout/page-4.jpg)。
+- 本轮不关闭真实双源换源、URL 取消或存储失败路径的历史验收缺口，未进行 final review、归档、提交或推送。
+
 ## 2026-10-30 启动图标定稿：本子任务实测
 
 - TDD 红灯已实际观察：新 launcher 契约在旧 painter 上因缺少 `LAUNCHER_WHITE`、缺少 maskable 生成接口、16/32 px 无白色几何和 iOS/ICO 仍含旧色而失败；最终审计新增的抗锯齿差分断言又实际捕获 maskable 可见内容半径 `205.81 px > 204.8 px`，随后才将独立缩放从 `0.84` 收至 `0.82`。
@@ -122,7 +155,7 @@
 
 ## 原生平台验证范围与限制
 
-- **Android：已验证。** Android SDK 位于 `D:\ProgramFiles\Android\Sdk`；debug APK 已构建、安装到 MuMu，并完成目标书源完整阅读链。最终 release 签名与实体设备仍未验证。
+- **Android：已验证。** Android SDK 位于 `D:\ProgramFiles\Android\Sdk`；debug APK 已构建、安装到 MuMu，并完成目标书源完整阅读链。2026-10-31 的通用 release 测试包另已核验 v2 签名、ZIP 完整性及三套 ABI，并以 `adb install -r` 安装和冷启动；仍使用既有调试证书，不等于正式发布签名，实体设备仍未验证。
 - **iOS：未验证。** 当前是 Windows 主机，未编译、签名或真机运行；不能由 Android 结果外推。
 - **Windows：部分环境验证。** Flutter/Dart 分析与离线测试通过，但 Developer Mode 关闭导致 plugin symlink/DLL 无法生成，未完成 Windows QuickJS 或 EXE 运行验证；未自动修改系统安全设置。
 

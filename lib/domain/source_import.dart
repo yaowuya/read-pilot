@@ -31,7 +31,7 @@ class SourceUrlImportInput extends SourceImportInput {
   final Uri uri;
 }
 
-/// Read-only provenance shown before any imported source is persisted.
+/// Read-only retrieval provenance prepared before import persistence.
 class SourceImportProvenance {
   const SourceImportProvenance({
     required this.kind,

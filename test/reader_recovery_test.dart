@@ -9,7 +9,12 @@ import 'package:read_pilot/application/app_controller.dart';
 import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
 import 'package:read_pilot/domain/book_source.dart';
+import 'package:read_pilot/domain/reader_settings.dart';
 import 'package:read_pilot/services/source_engine.dart';
+import 'package:read_pilot/ui/components/reader_preferences.dart';
+import 'package:read_pilot/ui/reader/reader_paragraph.dart';
+import 'package:read_pilot/ui/reader/reader_paginator.dart';
+import 'package:read_pilot/ui/screens/reader_screen.dart';
 import 'package:sembast/sembast_memory.dart';
 
 const _bookId = 'recovery-fixture';
@@ -23,19 +28,32 @@ class _FailingProgressRepository extends AppRepository {
   bool failWrites = false;
   int failedWrites = 0;
   Completer<void>? pendingWrite;
+  Completer<void>? pendingSettingsWrite;
+
+  @override
+  Future<void> saveSettings(ReaderSettings settings) async {
+    await pendingSettingsWrite?.future;
+    await super.saveSettings(settings);
+  }
 
   @override
   Future<void> savePosition(
     String id,
     ReadingPosition position, {
     bool? finished,
+    Book? expectedBook,
   }) async {
     if (failWrites) {
       failedWrites++;
       throw StateError('Storage write failed');
     }
     await pendingWrite?.future;
-    await super.savePosition(id, position, finished: finished);
+    await super.savePosition(
+      id,
+      position,
+      finished: finished,
+      expectedBook: expectedBook,
+    );
   }
 }
 
@@ -55,6 +73,19 @@ class _RetrySourceEngine extends SourceEngine {
   }
 }
 
+class _SwitchingSourceEngine extends _RetrySourceEngine {
+  final oldChapter = Completer<Chapter>();
+
+  @override
+  Future<Book> loadBook(BookSource source, Book result) async => result;
+
+  @override
+  Future<Chapter> loadChapter(BookSource source, Chapter chapter) async {
+    if (source.id == 'https://books.example') return oldChapter.future;
+    return chapter.withParagraphs(_paragraphs('New source'));
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Database database;
@@ -70,6 +101,9 @@ void main() {
     engine = _RetrySourceEngine();
     controller = AppController(repository, engine);
     await controller.initialize();
+    await controller.updateSettings(
+      controller.settings.copyWith(flow: ReaderFlow.scrolling),
+    );
     await controller.importSources(
       jsonEncode({
         'bookSourceUrl': 'https://books.example',
@@ -128,7 +162,11 @@ void main() {
 
   Future<void> openReader(WidgetTester tester) async {
     await tester.pumpWidget(
-      ReadPilotApp(controller: controller, initialRoute: '/read/$_bookId'),
+      ReadPilotApp(
+        key: UniqueKey(),
+        controller: controller,
+        initialRoute: '/read/$_bookId',
+      ),
     );
     await tester.pumpAndSettle();
   }
@@ -144,6 +182,552 @@ void main() {
     await tester.tap(find.byKey(const Key('reader-back')));
     await tester.pumpAndSettle();
   }
+
+  Future<void> checkSourceRebind(
+    WidgetTester tester, {
+    required bool cachedOld,
+    bool delayProgress = false,
+  }) async {
+    final original = controller.book(_bookId)!;
+    final old = Chapter(
+      id: 'first',
+      title: 'First chapter',
+      url: 'https://books.example/c/1',
+      paragraphs: cachedOld ? _paragraphs('Old source') : const [],
+    );
+    final switching = _SwitchingSourceEngine();
+    final delayedWrite = delayProgress ? Completer<void>() : null;
+    await tester.runAsync(() async {
+      controller.dispose();
+      engine = switching;
+      await repository.saveBook(original.copyWith(chapters: [old]));
+      controller = AppController(repository, engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode({
+          'bookSourceUrl': 'https://alternate.example',
+          'bookSourceName': '新书源',
+          'searchUrl': '/search?q={{key}}',
+          'ruleSearch': {
+            'bookList': '@CSS:.book',
+            'name': '@text',
+            'bookUrl': '@href',
+          },
+          'ruleToc': {
+            'chapterList': '@CSS:a',
+            'chapterName': '@text',
+            'chapterUrl': '@href',
+          },
+          'ruleContent': {'content': '@CSS:article@html'},
+        }),
+      );
+    });
+    await tester.pumpWidget(
+      ReadPilotApp(
+        key: UniqueKey(),
+        controller: controller,
+        initialRoute: '/read/$_bookId',
+      ),
+    );
+    await tester.pump();
+    if (cachedOld) {
+      await tester.pumpAndSettle();
+      final scroll = tester
+          .widget<SingleChildScrollView>(
+            find.byKey(const Key('reader-scrolling-view')),
+          )
+          .controller!;
+      repository.pendingWrite = delayedWrite;
+      scroll.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pump(
+        delayProgress ? const Duration(milliseconds: 600) : Duration.zero,
+      );
+    }
+    final replacement = Book(
+      id: 'alternate-candidate',
+      title: original.title,
+      author: original.author,
+      description: '',
+      category: '测试',
+      coverStyle: 0,
+      sourceLabel: '新书源',
+      sourceId: 'https://alternate.example',
+      url: 'https://alternate.example/book',
+      addedAt: DateTime.utc(2026),
+      chapters: [
+        Chapter(
+          id: 'new-first',
+          title: 'First chapter',
+          url: 'https://alternate.example/c/1',
+        ),
+      ],
+    );
+    await tester.runAsync(
+      () => controller.switchBookSource(_bookId, replacement),
+    );
+    repository.pendingWrite = null;
+    await tester.runAsync(() async {
+      switching.oldChapter.complete(
+        old.withParagraphs(_paragraphs('Old source')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    });
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    if (delayedWrite != null) {
+      await tester.runAsync(() async {
+        delayedWrite.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      await tester.pumpAndSettle();
+    }
+    final displayed = tester
+        .widgetList<ReaderParagraph>(find.byType(ReaderParagraph))
+        .map((paragraph) => paragraph.text)
+        .toList();
+    expect(displayed.any((text) => text.startsWith('New source')), isTrue);
+    expect(displayed.any((text) => text.startsWith('Old source')), isFalse);
+    expect(find.text('重新加载'), findsNothing);
+    expect(controller.book(_bookId)!.sourceId, 'https://alternate.example');
+    expect(controller.book(_bookId)!.position.paragraphIndex, 7);
+    expect(find.text(_saveError), findsNothing);
+    expect(tester.takeException(), isNull);
+  }
+
+  testWidgets('source rebinding invalidates a pending old chapter', (
+    tester,
+  ) async {
+    await checkSourceRebind(tester, cachedOld: false);
+  });
+
+  testWidgets(
+    'source rebinding reloads cached text without saving stale anchors',
+    (tester) async {
+      await checkSourceRebind(tester, cachedOld: true);
+    },
+  );
+
+  testWidgets(
+    'late progress rejection does not show a storage error on the new source',
+    (tester) async {
+      await checkSourceRebind(tester, cachedOld: true, delayProgress: true);
+    },
+  );
+
+  testWidgets('paged reader swipes and restores a logical paragraph anchor', (
+    tester,
+  ) async {
+    await tester.runAsync(
+      () => controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.paged),
+      ),
+    );
+    await tester.pumpWidget(
+      ReadPilotApp(
+        key: UniqueKey(),
+        controller: controller,
+        initialRoute: '/read/$_bookId',
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    final paged = find.byKey(const Key('reader-paged-view'));
+    expect(paged, findsOneWidget);
+    final pageController = tester.widget<PageView>(paged).controller!;
+    final initialPage = pageController.page!;
+
+    for (var index = 0; index < 4; index++) {
+      await tester.drag(paged, const Offset(-700, 0));
+      await tester.pumpAndSettle();
+    }
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    expect(pageController.page, greaterThan(initialPage));
+    final saved = controller.book(_bookId)!.position.paragraphIndex;
+    expect(saved, greaterThan(7));
+
+    await tester.tap(find.byKey(const Key('reader-back')));
+    await tester.pumpAndSettle();
+    await openReader(tester);
+    expect(find.byKey(const Key('reader-paged-view')), findsOneWidget);
+    expect(controller.book(_bookId)!.position.paragraphIndex, saved);
+  });
+
+  testWidgets('tapping page edges animates paging and the middle stays put', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.paged),
+      );
+      await controller.savePosition(_bookId, const ReadingPosition());
+    });
+    await openReader(tester);
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final pages = tester.widget<PageView>(paged).controller!;
+    final rect = tester.getRect(paged);
+    expect(find.bySemanticsLabel('上一页'), findsWidgets);
+    expect(find.bySemanticsLabel('下一页'), findsWidgets);
+    expect(pages.page, 0);
+    await tester.tapAt(Offset(rect.left + 12, rect.center.dy));
+    await tester.pumpAndSettle();
+    expect(pages.page, 0);
+
+    await tester.tapAt(Offset(rect.right - 12, rect.center.dy));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(pages.page, greaterThan(0));
+    expect(pages.page, lessThan(1));
+    await tester.pumpAndSettle();
+    expect(pages.page, 1);
+
+    await tester.tapAt(rect.center);
+    await tester.pumpAndSettle();
+    expect(pages.page, 1);
+    await tester.tapAt(Offset(rect.left + 12, rect.center.dy));
+    await tester.pumpAndSettle();
+    expect(pages.page, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('paged reader uses compact top spacing and fills its viewport', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(375, 812));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(() async {
+      await controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.paged),
+      );
+      await controller.savePosition(_bookId, const ReadingPosition());
+    });
+    await openReader(tester);
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final viewport = tester.getRect(paged);
+    final title = find.descendant(
+      of: paged,
+      matching: find.text('First chapter'),
+    );
+    final heading = tester.getRect(title);
+    expect(heading.top - viewport.top, lessThanOrEqualTo(16));
+    final bodyParagraphs = find.descendant(
+      of: paged,
+      matching: find.byType(ReaderParagraph),
+    );
+    final fragments = bodyParagraphs
+        .evaluate()
+        .map((element) => tester.getRect(find.byWidget(element.widget)))
+        .toList();
+    expect(fragments, isNotEmpty);
+    expect(fragments.first.top - heading.bottom, lessThanOrEqualTo(24));
+    final lastBottom = fragments
+        .map((rect) => rect.bottom)
+        .reduce((left, right) => left > right ? left : right);
+    expect(viewport.bottom - lastBottom, lessThan(100));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'short reader viewport safely falls back instead of overflowing',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(700, 220));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.runAsync(
+        () => controller.updateSettings(
+          controller.settings.copyWith(flow: ReaderFlow.paged, fontSize: 32),
+        ),
+      );
+      await openReader(tester);
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('reader-scrolling-view')), findsOneWidget);
+    },
+  );
+
+  testWidgets('both reading flows apply bold text without moving the anchor', (
+    tester,
+  ) async {
+    for (final flow in ReaderFlow.values) {
+      await tester.runAsync(
+        () => controller.updateSettings(
+          controller.settings.copyWith(
+            flow: flow,
+            boldText: true,
+            paragraphSpacing: 40,
+          ),
+        ),
+      );
+      await openReader(tester);
+      final paragraphs = tester.widgetList<ReaderParagraph>(
+        find.byType(ReaderParagraph),
+      );
+      expect(paragraphs, isNotEmpty);
+      expect(
+        paragraphs.every(
+          (paragraph) => paragraph.style.fontWeight == FontWeight.bold,
+        ),
+        isTrue,
+      );
+      expect(controller.book(_bookId)!.position.paragraphIndex, 7);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('scrolling reader uses the chosen paragraph spacing', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await controller.updateSettings(
+        controller.settings.copyWith(paragraphSpacing: 40),
+      );
+      await controller.savePosition(_bookId, const ReadingPosition());
+    });
+    await openReader(tester);
+    final paragraphs = find.byType(ReaderParagraph);
+    final first = tester.getRect(paragraphs.at(0));
+    final second = tester.getRect(paragraphs.at(1));
+    expect(second.top - first.bottom, closeTo(40, .1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('paged layout invalidates when spacing or weight changes', (
+    tester,
+  ) async {
+    await tester.runAsync(
+      () => controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.paged),
+      ),
+    );
+    await openReader(tester);
+    final paged = find.byKey(const Key('reader-paged-view'));
+    var previous = tester.widget<PageView>(paged).controller;
+    for (final settings in [
+      controller.settings.copyWith(paragraphSpacing: 40),
+      controller.settings.copyWith(paragraphSpacing: 40, boldText: true),
+    ]) {
+      await tester.runAsync(() => controller.updateSettings(settings));
+      await tester.pumpAndSettle();
+      final current = tester.widget<PageView>(paged).controller;
+      expect(current, isNot(same(previous)));
+      expect(controller.book(_bookId)!.position.paragraphIndex, 7);
+      expect(tester.takeException(), isNull);
+      previous = current;
+    }
+  });
+
+  testWidgets('directory order persists and still opens the original chapter', (
+    tester,
+  ) async {
+    engine.requests = 1;
+    await openReader(tester);
+    final originalIds = controller
+        .book(_bookId)!
+        .chapters
+        .map((chapter) => chapter.id)
+        .toList();
+    await tester.tap(find.byTooltip('章节目录'));
+    await tester.pumpAndSettle();
+    final order = find.byKey(const Key('reader-toc-order'));
+    expect(order, findsOneWidget);
+    await tester.tap(order);
+    await tester.pumpAndSettle();
+    expect(controller.settings.tocDescending, isTrue);
+    expect(
+      (tester.widget<ListTile>(find.byType(ListTile).first).title! as Text)
+          .data,
+      'Second chapter',
+    );
+    expect(
+      controller.book(_bookId)!.chapters.map((chapter) => chapter.id),
+      originalIds,
+    );
+    await tester.tap(find.byKey(const ValueKey('toc-chapter-1')));
+    await tester.pumpAndSettle();
+    expect(controller.book(_bookId)!.position.chapterIndex, 1);
+    await tester.tap(find.byTooltip('章节目录'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('倒序'), findsWidgets);
+    expect(
+      tester
+          .widget<ListTile>(find.byKey(const ValueKey('toc-chapter-1')))
+          .selected,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'sorting a directory preserves typography and the current page controller',
+    (tester) async {
+      await tester.runAsync(
+        () => controller.updateSettings(
+          controller.settings.copyWith(
+            flow: ReaderFlow.paged,
+            paragraphSpacing: 32,
+            boldText: true,
+          ),
+        ),
+      );
+      await openReader(tester);
+      final paged = find.byKey(const Key('reader-paged-view'));
+      final pages = tester.widget<PageView>(paged).controller;
+      await tester.tap(find.byTooltip('章节目录'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reader-toc-order')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<PageView>(paged).controller, same(pages));
+      expect(controller.settings.paragraphSpacing, 32);
+      expect(controller.settings.boldText, isTrue);
+      expect(controller.settings.tocDescending, isTrue);
+      expect(controller.book(_bookId)!.position.paragraphIndex, 7);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('reader preferences persist the selected flow', (tester) async {
+    await openReader(tester);
+    expect(find.byKey(const Key('reader-scrolling-view')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('reader-settings')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('reader-flow-paged')));
+    await tester.pumpAndSettle();
+
+    expect(controller.settings.flow, ReaderFlow.paged);
+  });
+
+  testWidgets(
+    'late settings completion cannot restore another chapter anchor',
+    (tester) async {
+      engine.requests = 1;
+      await openReader(tester);
+      final pending = Completer<void>();
+      repository.pendingSettingsWrite = pending;
+      await tester.tap(find.byKey(const Key('reader-settings')));
+      await tester.pumpAndSettle();
+      final bold = find.byKey(const Key('reader-bold-text'));
+      await tester.ensureVisible(bold);
+      await tester.tap(bold);
+      await tester.pump();
+      Navigator.of(tester.element(find.byType(ReaderPreferences))).pop();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reader-next')));
+      await tester.pumpAndSettle();
+      expect(controller.book(_bookId)!.position.chapterIndex, 1);
+      expect(controller.book(_bookId)!.position.paragraphIndex, 0);
+      pending.complete();
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+      expect(controller.book(_bookId)!.position.chapterIndex, 1);
+      expect(controller.book(_bookId)!.position.paragraphIndex, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'height-only fallback restores the paragraph reached while scrolling',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(700, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.runAsync(
+        () => controller.updateSettings(
+          controller.settings.copyWith(flow: ReaderFlow.paged),
+        ),
+      );
+      await openReader(tester);
+      final paged = find.byKey(const Key('reader-paged-view'));
+      final original = tester.widget<PageView>(paged).controller;
+      await tester.binding.setSurfaceSize(const Size(700, 220));
+      await tester.pumpAndSettle();
+      final scrolling = find.byKey(const Key('reader-scrolling-view'));
+      expect(scrolling, findsOneWidget);
+      final scroll = tester
+          .widget<SingleChildScrollView>(scrolling)
+          .controller!;
+      scroll.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+      final anchor = controller.book(_bookId)!.position.paragraphIndex;
+      expect(anchor, greaterThan(7));
+      await tester.binding.setSurfaceSize(const Size(700, 700));
+      await tester.pumpAndSettle();
+      final pages = tester.widget<PageView>(paged).controller!;
+      expect(pages, isNot(same(original)));
+      final rect = tester.getRect(paged);
+      final body = tester
+          .widget<ReaderParagraph>(
+            find
+                .descendant(of: paged, matching: find.byType(ReaderParagraph))
+                .first,
+          )
+          .style;
+      final layout = ReaderPaginator.paginate(
+        title: 'First chapter',
+        paragraphs: _paragraphs('First chapter'),
+        maxWidth: rect.width - 96,
+        maxHeight: rect.height - 40,
+        bodyStyle: body,
+        titleStyle: const TextStyle(
+          inherit: false,
+          fontFamily: 'NotoSansSC',
+          fontSize: 26,
+          height: 1.6,
+          fontWeight: FontWeight.w600,
+        ),
+        firstPageChromeHeight: 20,
+        paragraphSpacing: controller.settings.paragraphSpacing,
+      );
+      expect(
+        pages.page,
+        closeTo(layout.pageForParagraph(anchor).toDouble(), .001),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('paged headings share the measured text scaling policy', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.paged),
+      );
+      await controller.savePosition(_bookId, const ReadingPosition());
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: ReaderScreen(controller: controller, bookId: _bookId),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final paged = find.byKey(const Key('reader-paged-view'));
+    expect(paged, findsOneWidget);
+    final headingFinder = find.descendant(
+      of: paged,
+      matching: find.text('First chapter'),
+    );
+    final heading = tester.widget<Text>(headingFinder);
+    final scaler =
+        heading.textScaler ??
+        MediaQuery.textScalerOf(tester.element(headingFinder));
+    expect(scaler.scale(26), 26);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('next chapter retry retains the requested start anchor', (
     tester,

@@ -6,6 +6,7 @@ import '../domain/book.dart';
 import '../domain/book_source.dart';
 import '../domain/reader_settings.dart';
 import '../domain/source_import.dart';
+import '../domain/source_switch.dart';
 import '../services/source_engine.dart';
 import '../services/source_import_service.dart';
 import '../services/source_runtime/source_search_scheduler.dart';
@@ -98,6 +99,9 @@ class AppController extends ChangeNotifier {
   Future<Book> importText(Uint8List bytes, String fileName) =>
       addBook(TxtImporter().parse(bytes, fileName));
 
+  /// Saves a clamped logical anchor on the binding that supplied its content.
+  /// An absent/empty book is a no-op; a binding lost during persistence throws
+  /// StateError rather than publishing into a replacement. Storage errors propagate.
   Future<void> savePosition(
     String id,
     ReadingPosition position, {
@@ -117,9 +121,21 @@ class AppController extends ChangeNotifier {
         length > 0 ? length - 1 : 0,
       ),
     );
-    await repository.savePosition(id, safe, finished: finished);
+    await repository.savePosition(
+      id,
+      safe,
+      finished: finished,
+      expectedBook: current,
+    );
     final latest = book(id);
-    if (latest == null) return;
+    if (latest == null ||
+        latest.sourceId != current.sourceId ||
+        latest.url != current.url ||
+        chapterIndex >= latest.chapters.length ||
+        latest.chapters[chapterIndex].id != current.chapters[chapterIndex].id) {
+      // The write may have committed before a switch, but its completion is stale.
+      throw StateError('书籍已移除或来源、章节已变化，旧阅读进度未应用到当前书籍。');
+    }
     _replace(
       latest.copyWith(
         position: safe,
@@ -129,6 +145,9 @@ class AppController extends ChangeNotifier {
     );
   }
 
+  /// Returns cached text or a downloaded chapter after its cache write succeeds.
+  /// Throws SourceException if the book/binding/TOC slot becomes stale; retry the
+  /// current binding instead of displaying the rejected download. Storage errors propagate.
   Future<Chapter> chapter(String bookId, int index) async {
     final current = book(bookId);
     if (current == null || index < 0 || index >= current.chapters.length) {
@@ -137,7 +156,7 @@ class AppController extends ChangeNotifier {
     final chapter = current.chapters[index];
     if (chapter.isCached) return chapter;
     if (current.sourceId == null) throw const SourceException('本地章节没有正文。');
-    final key = '$bookId::$index';
+    final key = '$bookId::${current.sourceId}::${chapter.id}';
     if (_chapterLoads.containsKey(key)) return _chapterLoads[key]!;
     final pending = _downloadChapter(current, index);
     _chapterLoads[key] = pending;
@@ -149,17 +168,29 @@ class AppController extends ChangeNotifier {
   }
 
   Future<Chapter> _downloadChapter(Book current, int index) async {
+    final expectedSourceId = current.sourceId!;
+    final expectedChapterId = current.chapters[index].id;
     final loaded = await engine.loadChapter(
-      _source(current.sourceId!),
+      _source(expectedSourceId),
       current.chapters[index],
     );
-    await repository.cacheChapter(current.id, index, loaded);
+    final saved = await repository.cacheChapter(
+      current.id,
+      index,
+      loaded,
+      expectedSourceId: expectedSourceId,
+      expectedChapterId: expectedChapterId,
+    );
     final latest = book(current.id);
-    if (latest != null) {
-      _replace(
-        latest.copyWith(chapters: [...latest.chapters]..[index] = loaded),
-      );
+    if (!saved ||
+        latest == null ||
+        latest.sourceId != expectedSourceId ||
+        index >= latest.chapters.length ||
+        latest.chapters[index].id != expectedChapterId) {
+      // Reject the Future too: avoiding a stale cache write does not protect its caller.
+      throw const SourceException('书籍已移除或来源、章节已变化，请重新获取章节。');
     }
+    _replace(latest.copyWith(chapters: [...latest.chapters]..[index] = loaded));
     return loaded;
   }
 
@@ -219,6 +250,152 @@ class AppController extends ChangeNotifier {
         _search(source, keyword, page: page, abortTrigger: abortTrigger),
     abortTrigger: abortTrigger,
   );
+
+  /// Finds same-title results while keeping source order and author preference.
+  Future<SourceCandidateSearchResult> findSourceCandidates(
+    String bookId, {
+    Future<void>? abortTrigger,
+  }) async {
+    final current = book(bookId);
+    if (current == null || !current.isRemote) {
+      return SourceCandidateSearchResult(const []);
+    }
+    final titleKey = _matchKey(current.title);
+    final authorKey = _matchKey(current.author);
+    final ranked = <({Book book, bool authorMatch, int order})>[];
+    final seen = <String>{};
+    var order = 0;
+    var failedSources = 0;
+    for (final group in await searchSources(
+      current.title,
+      abortTrigger: abortTrigger,
+    )) {
+      if (group.error != null) failedSources++;
+      if (group.source.id == current.sourceId) continue;
+      for (final candidate in group.books) {
+        final candidateOrder = order++;
+        if (!seen.add(candidate.id) || _matchKey(candidate.title) != titleKey) {
+          continue;
+        }
+        ranked.add((
+          book: candidate,
+          authorMatch:
+              authorKey.isNotEmpty && _matchKey(candidate.author) == authorKey,
+          order: candidateOrder,
+        ));
+      }
+    }
+    ranked.sort((left, right) {
+      final author = (right.authorMatch ? 1 : 0).compareTo(
+        left.authorMatch ? 1 : 0,
+      );
+      return author != 0 ? author : left.order.compareTo(right.order);
+    });
+    return SourceCandidateSearchResult(
+      ranked.map((item) => item.book),
+      failedSources: failedSources,
+    );
+  }
+
+  /// Rebinds one shelf book only after target content and persistence succeed.
+  /// Rejects a destination change during loading so callers can retry explicitly.
+  Future<Book> switchBookSource(String bookId, Book candidate) async {
+    final current = book(bookId);
+    if (current == null || !current.isRemote) {
+      throw const SourceException('只有书架中的网络书籍可以换源。');
+    }
+    if (candidate.sourceId == null || candidate.sourceId == current.sourceId) {
+      throw const SourceException('请选择其他可用书源。');
+    }
+    final source = _source(candidate.sourceId!);
+    var replacement = await engine.loadBook(source, candidate);
+    final currentBookmarks = _bookmarks
+        .where((bookmark) => bookmark.bookId == current.id)
+        .toList();
+    final preliminary = const SourceSwitchMapper().plan(
+      current: current,
+      replacement: replacement,
+      bookmarks: currentBookmarks,
+    );
+    final targetIndex = preliminary.book.position.chapterIndex;
+    final loadedChapter = await engine.loadChapter(
+      source,
+      replacement.chapters[targetIndex],
+    );
+    replacement = replacement.copyWith(
+      chapters: [...replacement.chapters]..[targetIndex] = loadedChapter,
+    );
+    final latest = book(bookId);
+    if (latest == null || latest.sourceId != current.sourceId) {
+      throw const SourceException('书籍已删除或来源已改变，未执行换源。');
+    }
+    final latestBookmarks = _bookmarks
+        .where((bookmark) => bookmark.bookId == current.id)
+        .toList();
+    final plan = const SourceSwitchMapper().plan(
+      current: latest,
+      replacement: replacement,
+      bookmarks: latestBookmarks,
+    );
+    // Only the prefetched destination is validated; do not chase a moving reader.
+    if (plan.book.position.chapterIndex != targetIndex) {
+      throw const SourceException('阅读位置已变化，目标章节尚未验证，请重试换源。');
+    }
+    await repository.replaceBookSource(
+      plan.book,
+      plan.bookmarks,
+      expectedSourceId: latest.sourceId,
+      expectedPosition: latest.position,
+    );
+
+    final mappedBookmarks = {for (final item in plan.bookmarks) item.id: item};
+    _books = _books
+        .map((item) => item.id == plan.book.id ? plan.book : item)
+        .toList();
+    _bookmarks = [
+      for (final item in _bookmarks)
+        if (mappedBookmarks[item.id] case final mapped?)
+          item.copyWithPosition(
+            chapterIndex: mapped.chapterIndex,
+            paragraphIndex: mapped.paragraphIndex,
+          )
+        else
+          item,
+    ];
+    _notify();
+    return plan.book;
+  }
+
+  /// Refreshes and validates a cover before publishing its new URL.
+  Future<Book> refreshBookCover(String bookId) async {
+    final current = book(bookId);
+    if (current == null || current.sourceId == null) {
+      throw const SourceException('本地书籍没有可刷新的网络封面。');
+    }
+    final source = _source(current.sourceId!);
+    final refreshed = await engine.refreshBookInfo(source, current);
+    if (refreshed.coverUrl == null) {
+      throw const SourceException('当前书源没有提供封面。');
+    }
+    await engine.loadCover(source, refreshed.coverUrl!);
+    final updated = await repository.updateBookCover(
+      bookId,
+      refreshed.coverUrl!,
+      expectedSourceId: current.sourceId,
+    );
+    if (updated == null) {
+      throw const SourceException('书籍已删除或来源已改变，未保存封面。');
+    }
+    _replace(updated);
+    return updated;
+  }
+
+  /// Loads source-scoped cover bytes without persisting changes.
+  /// Returns null when source/cover is absent; source and download failures propagate.
+  Future<Uint8List?> loadBookCover(Book value) async {
+    if (value.sourceId == null || value.coverUrl == null) return null;
+    return engine.loadCover(_source(value.sourceId!), value.coverUrl!);
+  }
 
   Future<SourceSearchGroup> exploreSource(
     SourceExploreCategory category, {
@@ -282,6 +459,11 @@ class AppController extends ChangeNotifier {
     _notify();
   }
 
+  static String _matchKey(String value) => value.toLowerCase().replaceAll(
+    RegExp(r'[\s 　，。！？；：、,.!?;:\-—_《》【】()\[\]]+'),
+    '',
+  );
+
   void _replace(Book updated) {
     _books = _books
         .map((item) => item.id == updated.id ? updated : item)
@@ -308,6 +490,18 @@ class SourceExploreCategory {
   final BookSource source;
   final SourceExploreEntry entry;
   String get id => '${source.id}::${entry.title}::${entry.url}';
+}
+
+/// Ranked manual-switch candidates and failures among all searched enabled sources.
+/// The failure count also includes the current source, although its books are excluded.
+class SourceCandidateSearchResult {
+  SourceCandidateSearchResult(
+    Iterable<Book> candidates, {
+    this.failedSources = 0,
+  }) : candidates = List.unmodifiable(candidates);
+
+  final List<Book> candidates;
+  final int failedSources;
 }
 
 class SourceSearchGroup {

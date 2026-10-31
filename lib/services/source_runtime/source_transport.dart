@@ -67,6 +67,7 @@ class SourceTransport {
     RequestPlan plan, {
     required SourceNetworkPolicy policy,
     Future<void>? abortTrigger,
+    bool decodeText = true,
   }) async {
     final abort = Completer<void>();
     var cancelled = false;
@@ -190,7 +191,10 @@ class SourceTransport {
           builder.add(chunk);
         }
         final bytes = builder.takeBytes();
-        final text = _decodeText(bytes, response.headers['content-type']);
+        // Image responses share transport policy and budgets but are not text.
+        final text = decodeText
+            ? _decodeText(bytes, response.headers['content-type'])
+            : '';
         return ResponseEnvelope(
           requestUri: requestUri,
           finalUri: uri,

@@ -42,6 +42,15 @@ class SourceRuleSupport {
     }
   }
 
+  /// Accepts one whole-chapter `pattern##replacement` under the regex limits.
+  static bool isSafeContentReplacement(String rule) {
+    final separator = rule.indexOf('##');
+    if (separator <= 0) return false;
+    final pattern = rule.substring(0, separator);
+    return pattern.trim().isNotEmpty &&
+        isSafeRegex(pattern, rule.substring(separator + 2));
+  }
+
   static bool isSafeRegexRule(String rule) {
     var foundRegex = false;
     for (final rawBranch in _splitTopLevelFallbacks(rule)) {

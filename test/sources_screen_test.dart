@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -16,13 +17,19 @@ class _ImportController extends AppController {
   final SourceImportPreview preview;
   SourceImportInput? preparedInput;
   bool committed = false;
+  Object? commitError;
+  Completer<void>? pendingPreparation;
+  Completer<void>? pendingCommit;
+  final calls = <String>[];
 
   @override
   Future<SourceImportPreview> prepareSourceImport(
     SourceImportInput input, {
     Future<void>? abortTrigger,
   }) async {
+    calls.add('prepare');
     preparedInput = input;
+    await pendingPreparation?.future;
     return preview;
   }
 
@@ -33,6 +40,9 @@ class _ImportController extends AppController {
     SourceImportPreview preview, {
     Set<String>? selectedSourceIds,
   }) async {
+    calls.add('commit');
+    await pendingCommit?.future;
+    if (commitError != null) throw commitError!;
     committed = true;
     committedSourceIds = selectedSourceIds;
     final selected = preview.sources
@@ -107,9 +117,7 @@ void main() {
     await database.close();
   });
 
-  testWidgets('import sheet previews before committing any source', (
-    tester,
-  ) async {
+  Future<void> openImportSheet(WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -126,63 +134,81 @@ void main() {
         ),
       ),
     );
-
     await tester.tap(find.text('打开导入'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('source-mode-url')));
-    await tester.pump();
-    expect(find.byKey(const Key('source-url')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('source-mode-text')));
-    await tester.pump();
     await tester.enterText(find.byKey(const Key('source-json')), input);
-    await tester.tap(find.byKey(const Key('source-prepare')));
-    await tester.pumpAndSettle();
+  }
 
-    expect(controller.preparedInput, isA<SourceTextImportInput>());
-    expect(find.byKey(const Key('source-preview')), findsOneWidget);
-    expect(
-      find.textContaining('https://feed.example/source.json'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('https://cdn.example/source.json'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('最终地址来源已变化'), findsOneWidget);
-    expect(find.textContaining('application/json'), findsOneWidget);
-    expect(find.text('网络预览源'), findsOneWidget);
-    expect(find.text('不导入的源'), findsOneWidget);
-    expect(find.text('referer'), findsNWidgets(2));
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('source-preview')),
-        matching: find.textContaining('loginUrl'),
-      ),
-      findsOneWidget,
-    );
-    expect(find.textContaining('项能力需要后续实现'), findsNothing);
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('source-preview')),
-        matching: find.textContaining('/private'),
-      ),
-      findsNothing,
-    );
-    expect(controller.committed, isFalse);
+  testWidgets('import sheet prepares and commits all sources in one action', (
+    tester,
+  ) async {
+    await openImportSheet(tester);
 
-    final skippedSource = find.byKey(
-      const Key('source-select-https://skip.example'),
-    );
-    await tester.ensureVisible(skippedSource);
-    await tester.tap(skippedSource);
-    await tester.pump();
-    final commit = find.byKey(const Key('source-commit'));
-    await tester.ensureVisible(commit);
-    await tester.tap(commit);
-    await tester.pumpAndSettle();
-
-    expect(controller.committed, isTrue);
-    expect(controller.committedSourceIds, {'https://books.example'});
     expect(find.byKey(const Key('source-preview')), findsNothing);
+    expect(find.byType(Checkbox), findsNothing);
+    await tester.tap(find.byKey(const Key('source-import')));
+    await tester.pumpAndSettle();
+
+    expect(controller.calls, ['prepare', 'commit']);
+    expect(controller.preparedInput, isA<SourceTextImportInput>());
+    expect(controller.committed, isTrue);
+    expect(controller.committedSourceIds, isNull);
+    expect(find.byKey(const Key('source-json')), findsNothing);
+  });
+
+  testWidgets('atomic persistence disables cancellation after preparation', (
+    tester,
+  ) async {
+    controller.pendingCommit = Completer<void>();
+    await openImportSheet(tester);
+
+    await tester.tap(find.byKey(const Key('source-import')));
+    await tester.pump();
+
+    expect(controller.calls, ['prepare', 'commit']);
+    final cancel = tester.widget<TextButton>(
+      find.widgetWithText(TextButton, '取消'),
+    );
+    expect(cancel.onPressed, isNull);
+    expect(find.text('正在保存书源…'), findsOneWidget);
+
+    controller.pendingCommit!.complete();
+    await tester.pumpAndSettle();
+    expect(controller.committed, isTrue);
+    expect(find.byKey(const Key('source-json')), findsNothing);
+  });
+
+  testWidgets('cancelling preparation never starts persistence', (
+    tester,
+  ) async {
+    controller.pendingPreparation = Completer<void>();
+    await openImportSheet(tester);
+
+    await tester.tap(find.byKey(const Key('source-import')));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    controller.pendingPreparation!.complete();
+    await tester.pumpAndSettle();
+
+    expect(controller.calls, ['prepare']);
+    expect(controller.committed, isFalse);
+    expect(find.text('已取消导入书源。'), findsOneWidget);
+    expect(find.byKey(const Key('source-import')), findsOneWidget);
+  });
+
+  testWidgets('commit failure keeps the import sheet and input visible', (
+    tester,
+  ) async {
+    controller.commitError = StateError('保存失败');
+    await openImportSheet(tester);
+
+    await tester.tap(find.byKey(const Key('source-import')));
+    await tester.pumpAndSettle();
+
+    expect(controller.calls, ['prepare', 'commit']);
+    expect(controller.committed, isFalse);
+    expect(find.byKey(const Key('source-json')), findsOneWidget);
+    expect(find.byKey(const Key('source-error')), findsOneWidget);
+    expect(find.textContaining('保存失败'), findsOneWidget);
   });
 }

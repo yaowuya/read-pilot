@@ -246,6 +246,8 @@ class SourceDefinition {
 
   static Map<String, dynamic> _parseRuleSet(dynamic value, String path) {
     if (value == null || value == '') return {};
+    // Some Legado feeds encode an absent review rule as an empty array.
+    if (path == 'ruleReview' && value is List && value.isEmpty) return {};
     dynamic decoded = value;
     if (value is String) {
       try {
@@ -395,10 +397,15 @@ class SourceDefinition {
         }
         if (text.contains('##') ||
             rule.key.toString().toLowerCase().contains('regex')) {
+          final isContentReplacement =
+              set.key == 'ruleContent' && rule.key == 'replaceRegex';
           final supported =
               text.contains('##') &&
-              (_regexExtractionFields[set.key]?.contains(rule.key) ?? false) &&
-              SourceRuleSupport.isSafeRegexRule(text);
+              ((isContentReplacement &&
+                      SourceRuleSupport.isSafeContentReplacement(text)) ||
+                  (_regexExtractionFields[set.key]?.contains(rule.key) ??
+                          false) &&
+                      SourceRuleSupport.isSafeRegexRule(text));
           add(
             path,
             SourceCapability.regex,

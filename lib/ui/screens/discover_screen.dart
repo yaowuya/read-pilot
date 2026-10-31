@@ -254,6 +254,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               padding: const EdgeInsets.only(bottom: 16),
               child: _BookResult(
                 book: book,
+                controller: widget.controller,
                 inShelf: widget.controller.book(book.id) != null,
                 onTap: () => widget.onDetails(book),
               ),
@@ -352,6 +353,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                     padding: const EdgeInsets.only(bottom: 14),
                     child: _BookResult(
                       book: book,
+                      controller: widget.controller,
                       inShelf: widget.controller.book(book.id) != null,
                       onTap: () => widget.onDetails(book),
                     ),
@@ -401,10 +403,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 class _BookResult extends StatelessWidget {
   const _BookResult({
     required this.book,
+    required this.controller,
     required this.inShelf,
     required this.onTap,
   });
   final Book book;
+  final AppController controller;
   final bool inShelf;
   final VoidCallback onTap;
   @override
@@ -416,7 +420,12 @@ class _BookResult extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          BookCover(book: book, width: 78, height: 110),
+          BookCover(
+            book: book,
+            imageLoader: controller.loadBookCover,
+            width: 78,
+            height: 110,
+          ),
           const SizedBox(width: 22),
           Expanded(
             child: Column(
