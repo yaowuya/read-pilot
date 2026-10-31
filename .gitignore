@@ -30,3 +30,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
+
+# Machine-local tool state and execution artifacts
+/.codegraph/
+/.taste-skill/direction.json
+/docs/task-state.json
+/fp-docs/changes/**/.fp-execute/
