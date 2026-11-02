@@ -23,7 +23,7 @@
 | --- | --- | --- | --- |
 | object/array、0–4 类型、未知字段保留 | 已实现 | 已实现 | 导入最多 500 个源，原始 JSON 可往返 |
 | string/object header | 已实现 | 受浏览器限制 | CR/LF、hop-by-hop header 在联网前拒绝 |
-| URL 导入 | 已验证 | 受 CORS/混合内容限制 | paste/file/URL 共用有界解析；一次确认后校验并原子提交，无预览列表 |
+| URL 导入 | 已验证 | 受 CORS/混合内容限制 | paste/file/URL 共用有界解析；先在内存检查并预览，用户明确选择来源子集后一次原子提交 |
 | GET/POST/HEAD、form/JSON/raw | 已实现 | 依浏览器 transport | source → 默认 UA → URL options 合并 |
 | UTF-8/GBK 请求与响应 | 已实现 | 已实现 | GBK 仅用 whole-buffer codec；未知 charset 明确拒绝 |
 | CSS 与 legacy | 已实现子集 | 已实现子集 | CSS、`class.*`、`id.*`、`tag.*`、bare `text/href`、`text.文本@属性` |
@@ -38,7 +38,7 @@
 
 ## 安全硬上限
 
-- 导入：10 MiB、最多 500 个源、JSON 深度 64。
+- 导入：100 MiB、最多 500 个源、JSON 深度 64。
 - 单请求：15 秒、4 次跳转、响应 2 MiB。
 - workflow：目录/正文各最多 10 页；跨来源搜索并发 4。
 - DOM：50,000 节点、深度 128；目录 10,000 个唯一章节。

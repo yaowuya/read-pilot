@@ -8,13 +8,14 @@ import '../domain/source_definition.dart';
 /// Parsing accepts representable fields even when their runtime capability is
 /// not implemented. Network access, scripts and persistence happen elsewhere.
 class SourceImporter {
-  static const maxBytes = 10 * 1024 * 1024;
+  static const maxBytes = 100 * 1024 * 1024;
+  static const maxBytesLabel = '100 MiB';
   static const maxSources = 500;
   static const maxJsonDepth = 64;
 
   List<BookSource> parse(String input) {
     if (utf8.encode(input).length > maxBytes) {
-      throw const FormatException('书源 JSON 不能超过 10 MiB。');
+      throw const FormatException('书源 JSON 不能超过 $maxBytesLabel。');
     }
     final dynamic decoded;
     try {

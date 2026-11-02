@@ -143,6 +143,7 @@ void main() {
 
     expect(find.byKey(const Key('book-refresh-cover')), findsOneWidget);
     expect(find.byKey(const Key('book-change-source')), findsOneWidget);
+    expect(find.byKey(const Key('book-cache-chapters')), findsOneWidget);
     await tester.tap(find.byKey(const Key('book-change-source')));
     await tester.pumpAndSettle();
     expect(find.textContaining('新源'), findsOneWidget);
@@ -155,6 +156,17 @@ void main() {
     await tester.tap(find.byKey(const Key('book-refresh-cover')));
     await tester.pumpAndSettle();
     expect(controller.refreshed, isTrue);
+  });
+
+  testWidgets('source switch sheet includes its drag handle on warm paper', (
+    tester,
+  ) async {
+    await pumpDetails(tester);
+    await tester.tap(find.byKey(const Key('book-change-source')));
+    await tester.pumpAndSettle();
+
+    final sheet = tester.widget<BottomSheet>(find.byType(BottomSheet));
+    expect(sheet.backgroundColor, const Color(0xFFF1EDE1));
   });
 
   testWidgets('local books hide source actions', (tester) async {
@@ -175,6 +187,7 @@ void main() {
 
     expect(find.byKey(const Key('book-refresh-cover')), findsNothing);
     expect(find.byKey(const Key('book-change-source')), findsNothing);
+    expect(find.byKey(const Key('book-cache-chapters')), findsNothing);
   });
 
   testWidgets('source sheet distinguishes empty and failed searches', (

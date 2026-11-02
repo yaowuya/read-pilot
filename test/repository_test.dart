@@ -517,4 +517,115 @@ void main() {
     await repository.savePosition(book.id, const ReadingPosition());
     expect((await repository.books()).any((b) => b.id == book.id), isFalse);
   });
+
+  test(
+    'startup preserves existing paragraph boundaries and saved anchors',
+    () async {
+      final book = (await repository.books()).first;
+      const paragraphs = ['原文里   保留的空格', '已经独立的第二段'];
+      await repository.saveBook(
+        book.copyWith(
+          chapters: [
+            Chapter(id: 'existing', title: '第一章', paragraphs: paragraphs),
+            Chapter(
+              id: 'single',
+              title: '第二章',
+              paragraphs: const ['独立正文   保留的间距'],
+            ),
+          ],
+          position: const ReadingPosition(paragraphIndex: 1),
+        ),
+      );
+      final note = Bookmark(
+        id: 'structured-note',
+        bookId: book.id,
+        chapterIndex: 0,
+        paragraphIndex: 1,
+        quote: paragraphs[1],
+        note: '保留锚点',
+        createdAt: DateTime.utc(2026),
+      );
+      await repository.saveBookmark(note);
+      await stringMapStoreFactory
+          .store('meta')
+          .record('contentSplit')
+          .delete(database);
+
+      await repository.initialize();
+
+      final stored = (await repository.books()).firstWhere(
+        (item) => item.id == book.id,
+      );
+      expect(stored.chapters.first.paragraphs, paragraphs);
+      expect(stored.chapters.last.paragraphs, ['独立正文   保留的间距']);
+      expect(stored.position.paragraphIndex, 1);
+      expect((await repository.bookmarks()).single.paragraphIndex, 1);
+    },
+  );
+
+  test('re-splits a stored blob chapter and rebases its saved anchor', () async {
+    final book = (await repository.books()).first;
+    // A chapter cached before gap-aware splitting: one paragraph, space gaps.
+    final blob = '第一段。${' ' * 4}第二段。${' ' * 4}第三段。';
+    await repository.saveBook(
+      book.copyWith(
+        chapters: [
+          Chapter(id: 'c1', title: '第一章', paragraphs: [blob]),
+        ],
+        position: const ReadingPosition(chapterIndex: 0, paragraphIndex: 0),
+      ),
+    );
+    // This test explicitly opts in; ordinary startup leaves cached text alone.
+    await stringMapStoreFactory.store('meta').record('contentSplit').put(
+      database,
+      {'requested': true},
+    );
+
+    await repository.initialize();
+
+    final migrated = (await repository.books()).firstWhere(
+      (b) => b.id == book.id,
+    );
+    expect(migrated.chapters.single.paragraphs, ['第一段。', '第二段。', '第三段。']);
+    expect(migrated.position.paragraphIndex, 0);
+
+    // Re-running must be idempotent, not split the pieces again.
+    await repository.initialize();
+    final again = (await repository.books()).firstWhere((b) => b.id == book.id);
+    expect(again.chapters.single.paragraphs, ['第一段。', '第二段。', '第三段。']);
+  });
+
+  test('migration moves a mid-blob bookmark onto its sub-paragraph', () async {
+    final book = (await repository.books()).first;
+    final blob = '甲。${' ' * 4}乙。${' ' * 4}丙。';
+    await repository.saveBook(
+      book.copyWith(
+        chapters: [
+          Chapter(id: 'c1', title: '第一章', paragraphs: [blob]),
+        ],
+      ),
+    );
+    final note = Bookmark(
+      id: 'note-in-blob',
+      bookId: book.id,
+      chapterIndex: 0,
+      paragraphIndex: 0,
+      quote: blob,
+      note: '',
+      createdAt: DateTime.utc(2026),
+    );
+    await repository.saveBookmark(note);
+    await stringMapStoreFactory.store('meta').record('contentSplit').put(
+      database,
+      {'requested': true},
+    );
+
+    await repository.initialize();
+
+    final restored = (await repository.bookmarks()).firstWhere(
+      (item) => item.id == note.id,
+    );
+    expect(restored.paragraphIndex, 0);
+    expect(restored.quote, blob);
+  });
 }

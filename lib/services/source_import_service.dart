@@ -33,6 +33,11 @@ class SourceImportService {
   final Duration timeout;
   final int maxResponseBytes;
 
+  String get _maxResponseBytesLabel =>
+      maxResponseBytes == SourceImporter.maxBytes
+      ? SourceImporter.maxBytesLabel
+      : '$maxResponseBytes 字节';
+
   Future<SourceImportPreview> prepare(
     SourceImportInput input, {
     Future<void>? abortTrigger,
@@ -172,7 +177,7 @@ class SourceImportService {
           if (bytes.length + chunk.length > maxResponseBytes) {
             throw SourceImportException(
               SourceImportErrorKind.tooLarge,
-              '网络书源不能超过 $maxResponseBytes 字节。',
+              '网络书源不能超过 $_maxResponseBytesLabel。',
             );
           }
           bytes.add(chunk);

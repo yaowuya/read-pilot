@@ -34,6 +34,21 @@ void main() {
   });
 
   test(
+    'curated local palettes survive JSON while unknown values stay safe',
+    () {
+      for (final theme in [ReaderTheme.sage, ReaderTheme.mist]) {
+        final restored = ReaderSettings.fromJson({'theme': theme.name});
+        expect(restored.theme, theme);
+        expect(restored.toJson()['theme'], theme.name);
+      }
+      expect(
+        ReaderSettings.fromJson({'theme': 'device-dynamic'}).theme,
+        ReaderTheme.paper,
+      );
+    },
+  );
+
+  test(
     'paragraph spacing is bounded and non-finite values use the default',
     () {
       for (final entry in {

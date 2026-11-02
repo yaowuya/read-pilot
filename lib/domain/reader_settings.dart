@@ -1,4 +1,4 @@
-enum ReaderTheme { paper, light, dark }
+enum ReaderTheme { paper, light, dark, sage, mist }
 
 enum ReaderFlow { paged, scrolling }
 

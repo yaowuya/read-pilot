@@ -11,6 +11,25 @@ final class ContentNormalizer {
     r'^[\u0000-    -​  　﻿]+|[\u0000-    -​  　﻿]+$',
   );
   static final _comparisonWhitespace = RegExp(r'[\s   -​  　﻿]+');
+  // Many sources indent paragraphs with runs of spaces and no <br>. Splitting on
+  // those runs is what turns a flattened blob back into readable paragraphs. Two
+  // spaces stay significant mid-sentence, so a gap needs three or a double 　.
+  static final _lineBreak = RegExp('\\n+|[ \\t\\u00a0]{3,}|\\u3000{2,}');
+
+  /// Expands one raw block into display paragraphs, preserving their order.
+  /// Set [decode] to false for text an earlier extraction already decoded.
+  List<String> splitParagraphs(String raw, {bool decode = true}) {
+    final blocks = (decode ? _decodeBoundaries(raw) : raw)
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .split(_lineBreak);
+    final output = <String>[];
+    for (final block in blocks) {
+      final text = _trimEdges(block);
+      if (text.isNotEmpty) output.add(text);
+    }
+    return output;
+  }
 
   /// Punctuation stays significant when comparing titles and duplicate text.
   List<String> normalize(
@@ -21,12 +40,7 @@ final class ContentNormalizer {
     final titleKey = _comparisonKey(chapterTitle);
     String? previousKey;
     for (final raw in input) {
-      final lines = _decodeBoundaries(
-        raw,
-      ).replaceAll('\r\n', '\n').replaceAll('\r', '\n').split(RegExp(r'\n+'));
-      for (final line in lines) {
-        final text = _trimEdges(line);
-        if (text.isEmpty) continue;
+      for (final text in splitParagraphs(raw)) {
         final key = _comparisonKey(text);
         if (output.isEmpty && titleKey.isNotEmpty && key == titleKey) {
           continue;

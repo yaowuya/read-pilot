@@ -5,6 +5,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from PIL import Image
@@ -16,9 +17,13 @@ IOS_LAUNCH = Path("ios/Runner/Assets.xcassets/LaunchImage.imageset")
 ANDROID_RES = Path("android/app/src/main/res")
 WINDOWS_ICON = Path("windows/runner/resources/app_icon.ico")
 
-BLUE_TOP = (58, 169, 255)
-BLUE_BOTTOM = (40, 161, 255)
 WHITE = (255, 255, 255)
+SOURCE_HASHES = {
+    "app_icon_1024.png": "62d7e501bc27ec39a04f4a4e3c786fe878187d498727ed52dbfc75bc03790cfa",
+    "logo_transparent.png": "4e456e05bca0a3bbf161ad8fb5c441a01e93b4ef765d9670f8a0f535273b04fc",
+    "android_foreground.png": "a86e8dad402665fa140646a4e17becf8e7ed186d18d27739f92ef2fe318be7c0",
+    "android_monochrome.png": "ee4e48dcab2230ce97df3d40bdb296b7c7dedd3669422859b490ac1b93a0c190",
+}
 ICO_SIZES = {(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)}
 LAUNCH_HASHES = {
     "LaunchImage.png": "f3fc1421fabab01590e273e635fb9ca09cdffab4d285d3f0a510c4c3ccc7f029",
@@ -35,37 +40,22 @@ def load_generator():
     return module
 
 
-def _close(actual, expected, tolerance=2):
-    return all(abs(channel - target) <= tolerance for channel, target in zip(actual[:3], expected))
-
-
-def _is_white(pixel, threshold=235):
-    return all(channel >= threshold for channel in pixel[:3])
-
-
-def _white_points(image, threshold=235):
-    width = image.width
+def _blue_points(image):
+    rgb = image.convert("RGB")
     return [
-        (index % width, index // width)
-        for index, pixel in enumerate(image.convert("RGB").getdata())
-        if _is_white(pixel, threshold)
+        (index % rgb.width, index // rgb.width)
+        for index, (red, green, blue) in enumerate(rgb.getdata())
+        if blue - red >= 70 and blue - green >= 12
     ]
 
 
 def _visible_mark_points(image, threshold=8):
     rgb = image.convert("RGB")
-    denominator = max(1, rgb.height - 1)
-    points = []
-    for index, pixel in enumerate(rgb.getdata()):
-        y = index // rgb.width
-        ratio = y / denominator
-        background = tuple(
-            round(start + (end - start) * ratio)
-            for start, end in zip(BLUE_TOP, BLUE_BOTTOM)
-        )
-        if max(abs(channel - expected) for channel, expected in zip(pixel, background)) >= threshold:
-            points.append((index % rgb.width, y))
-    return points
+    return [
+        (index % rgb.width, index // rgb.width)
+        for index, pixel in enumerate(rgb.getdata())
+        if max(abs(channel - 255) for channel in pixel) >= threshold
+    ]
 
 
 def _alpha_points(image, threshold=8):
@@ -120,6 +110,9 @@ def _expected_generated_paths():
         "web/icons/Icon-maskable-192.png",
         "web/icons/Icon-maskable-512.png",
         "android/app/src/main/res/drawable-nodpi/ic_launcher_foreground.png",
+        "android/app/src/main/res/drawable-nodpi/ic_launcher_monochrome.png",
+        "android/app/src/main/res/mipmap-anydpi-v33/ic_launcher.xml",
+        "android/app/src/main/res/mipmap-anydpi-v33/ic_launcher_round.xml",
         "android/app/src/main/res/values/colors.xml",
         "android/app/src/main/res/drawable/ic_launcher_background.xml",
         "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml",
@@ -137,18 +130,105 @@ def _expected_generated_paths():
 
 
 class BrandAssetsTest(unittest.TestCase):
-    def assertWhiteNear(self, image, x_ratio, y_ratio, radius_ratio=0.025):
-        rgb = image.convert("RGB")
-        center_x = round((rgb.width - 1) * x_ratio)
-        center_y = round((rgb.height - 1) * y_ratio)
-        radius = max(1, round(rgb.width * radius_ratio))
-        found = any(
-            _is_white(rgb.getpixel((x, y)))
-            for y in range(max(0, center_y - radius), min(rgb.height, center_y + radius + 1))
-            for x in range(max(0, center_x - radius), min(rgb.width, center_x + radius + 1))
-            if (x - center_x) ** 2 + (y - center_y) ** 2 <= radius**2
-        )
-        self.assertTrue(found, f"expected white geometry near ({x_ratio:.3f}, {y_ratio:.3f})")
+    def test_portable_sources_preserve_the_supplied_final_artwork(self):
+        for filename, expected_hash in SOURCE_HASHES.items():
+            with self.subTest(source=filename):
+                source = ROOT / "assets/branding/source" / filename
+                self.assertTrue(source.is_file(), f"missing portable icon source: {source}")
+                self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), expected_hash)
+                with Image.open(source) as image:
+                    self.assertEqual(image.size, (1024, 1024))
+                    self.assertEqual(image.mode, "RGB" if filename == "app_icon_1024.png" else "RGBA")
+
+    def test_launcher_master_is_the_polished_diagonal_feather_not_the_geometric_experiment(self):
+        generator = load_generator()
+        with Image.open(ROOT / "assets/branding/source/app_icon_1024.png") as source:
+            expected = source.convert("RGB").tobytes()
+        actual = generator.generate_icon(1024)
+        self.assertEqual(actual.size, (1024, 1024))
+        self.assertEqual(actual.convert("RGB").tobytes(), expected)
+        self.assertEqual(actual.convert("RGBA").getextrema()[3], (255, 255))
+        self.assertTrue(callable(getattr(generator, "generate_geometric_icon", None)),
+                        "retain the authored geometric renderer as an explicit experiment")
+
+    def test_adaptive_and_monochrome_use_provided_portable_inputs(self):
+        generator = load_generator()
+        for factory_name, filename in (
+            ("generate_adaptive_foreground", "android_foreground.png"),
+            ("generate_monochrome_foreground", "android_monochrome.png"),
+        ):
+            with self.subTest(layer=filename):
+                factory = getattr(generator, factory_name, None)
+                self.assertTrue(callable(factory), f"missing Android layer generator: {factory_name}")
+                with Image.open(ROOT / "assets/branding/source" / filename) as source:
+                    expected = source.resize((432, 432), Image.Resampling.LANCZOS)
+                actual = factory(432)
+                self.assertEqual(actual.mode, "RGBA")
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+                self.assertAdaptiveSafeZone(actual)
+                if "monochrome" in filename:
+                    visible = [pixel for pixel in actual.getdata() if pixel[3] > 0]
+                    self.assertTrue(visible)
+                    self.assertTrue(all(pixel[:3] == WHITE for pixel in visible))
+                    self.assertLess(len(visible), 432 * 432 * 0.20)
+
+    def test_white_maskable_retains_feather_inside_safe_circle(self):
+        generator = load_generator()
+        factory = getattr(generator, "generate_maskable_icon", None)
+        self.assertTrue(callable(factory), "maskable launcher generator is required")
+        for size in (192, 512):
+            with self.subTest(size=size):
+                image = factory(size)
+                self.assertMaskableSafeZone(image)
+                self.assertEqual(image.convert("RGB").getpixel((0, 0)), WHITE)
+                points = _blue_points(image)
+                self.assertGreater(len(points), size * size * 0.08)
+                self.assertLess(len(points), size * size * 0.30)
+                # The reduced mark must still occupy the centre, not be an
+                # empty white tile or an already-inset adaptive icon shrunk twice.
+                self.assertLess(min(x for x, _ in points), size * 0.25)
+                self.assertGreaterEqual(max(x for x, _ in points) + 1, size * 0.75)
+
+    def test_generated_targets_include_android_13_without_touching_source_or_metadata(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            _prepare_generation_root(target)
+            metadata = target / IOS_APPICON / "Contents.json"
+            metadata_before = metadata.read_bytes()
+            paths = generator.write_all_assets(target)
+            self.assertEqual(len(paths), 42)
+            self.assertEqual(len(set(paths)), 42)
+            self.assertEqual({path.relative_to(target).as_posix() for path in paths},
+                             _expected_generated_paths())
+            self.assertEqual(metadata.read_bytes(), metadata_before)
+            for name in ("ic_launcher.xml", "ic_launcher_round.xml"):
+                xml = (target / ANDROID_RES / "mipmap-anydpi-v33" / name).read_text(encoding="utf-8")
+                self.assertIn('<monochrome android:drawable="@drawable/ic_launcher_monochrome"', xml)
+            with Image.open(target / ANDROID_RES / "drawable-nodpi/ic_launcher_monochrome.png") as image:
+                self.assertAdaptiveSafeZone(image)
+
+    def test_legacy_round_icons_do_not_clip_the_feather(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            _prepare_generation_root(target)
+            generator.write_all_assets(target)
+            for density in ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"):
+                with self.subTest(density=density):
+                    with Image.open(target / ANDROID_RES / f"mipmap-{density}/ic_launcher_round.png") as image:
+                        rgba = image.convert("RGBA")
+                    self.assertEqual(rgba.getpixel((0, 0))[3], 0)
+                    points = [
+                        (index % rgba.width, index // rgba.width)
+                        for index, pixel in enumerate(rgba.getdata())
+                        if pixel[3] >= 245 and max(255 - value for value in pixel[:3]) >= 32
+                    ]
+                    self.assertTrue(points)
+                    center = (rgba.width - 1) / 2
+                    radius = max(((x - center) ** 2 + (y - center) ** 2) ** 0.5 for x, y in points)
+                    self.assertLessEqual(radius / rgba.width, 0.49,
+                                         "important feather/book pixels must not meet the circular crop")
 
     def assertMaskableSafeZone(self, image):
         rgba = image.convert("RGBA")
@@ -193,52 +273,33 @@ class BrandAssetsTest(unittest.TestCase):
                 with Image.open(root / relative) as image:
                     self.assertMaskableSafeZone(image)
 
-        with Image.open(
-            root / ANDROID_RES / "drawable-nodpi/ic_launcher_foreground.png"
-        ) as image:
-            self.assertAdaptiveSafeZone(image)
+        for name in ("ic_launcher_foreground.png", "ic_launcher_monochrome.png"):
+            with Image.open(root / ANDROID_RES / "drawable-nodpi" / name) as image:
+                self.assertAdaptiveSafeZone(image)
 
-    def test_launcher_master_has_blue_gradient_white_open_book_and_feather(self):
+    def test_white_tile_has_blue_book_and_translucent_diagonal_feather(self):
         generator = load_generator()
-        self.assertEqual(generator.LAUNCHER_BLUE_TOP, "#3AA9FF")
-        self.assertEqual(generator.LAUNCHER_BLUE_BOTTOM, "#28A1FF")
-        self.assertEqual(getattr(generator, "LAUNCHER_WHITE", None), "#FFFFFF")
-
         icon = generator.generate_icon(1024).convert("RGB")
-        self.assertTrue(_close(icon.getpixel((8, 8)), BLUE_TOP))
-        self.assertTrue(_close(icon.getpixel((8, 1015)), BLUE_BOTTOM))
+        for point in ((0, 0), (1023, 0), (0, 1023), (1023, 1023), (150, 150)):
+            with self.subTest(background=point):
+                self.assertEqual(icon.getpixel(point), WHITE)
 
-        extrema = icon.getextrema()
-        self.assertGreaterEqual(extrema[1][0], 145, "legacy ink/red pixels must not remain")
-        self.assertGreaterEqual(extrema[2][0], 250, "launcher mark must use only blue and white")
-        self.assertGreater(len(_white_points(icon)), 20_000)
+        # Independent visual landmarks from the approved diagonal-feather design:
+        # saturated pages and bottom fold, translucent blade, and pale cyan stem.
+        for x_ratio, y_ratio in ((0.22, 0.50), (0.80, 0.60), (0.50, 0.82)):
+            pixel = icon.getpixel((round(x_ratio * 1023), round(y_ratio * 1023)))
+            self.assertLess(pixel[0], 35)
+            self.assertGreater(pixel[2], 235)
+        blade = icon.getpixel((665, 348))
+        self.assertGreater(blade[0], 100)
+        self.assertGreater(blade[1], 170)
+        self.assertGreater(blade[2], 220)
+        stem = icon.getpixel((184, 880))
+        self.assertGreater(stem[0], 130)
+        self.assertGreater(stem[1], 220)
+        self.assertGreater(stem[2], 235)
 
-        # Open-book outline: left/right crowns, lower corners, and the central fold.
-        for point in (
-            (0.20, 0.51),
-            (0.34, 0.47),
-            (0.50, 0.54),
-            (0.66, 0.47),
-            (0.81, 0.51),
-            (0.20, 0.71),
-            (0.50, 0.79),
-            (0.81, 0.71),
-        ):
-            with self.subTest(book_point=point):
-                self.assertWhiteNear(icon, *point)
-
-        # The feather-leaf grows from the right page and occupies only the upper-right field.
-        for point in ((0.56, 0.66), (0.61, 0.47), (0.53, 0.38), (0.73, 0.35), (0.79, 0.18)):
-            with self.subTest(feather_point=point):
-                self.assertWhiteNear(icon, *point)
-        upper_left = icon.crop((80, 80, 390, 390))
-        self.assertLess(len(_white_points(upper_left)), 500)
-
-        # The pages stay outlined instead of becoming a filled white book.
-        self.assertFalse(_is_white(icon.getpixel((round(0.34 * 1024), round(0.61 * 1024)))))
-        self.assertFalse(_is_white(icon.getpixel((round(0.68 * 1024), round(0.62 * 1024)))))
-
-    def test_normalized_geometry_is_deterministic_and_readable_at_small_sizes(self):
+    def test_final_artwork_is_deterministic_and_readable_at_small_sizes(self):
         generator = load_generator()
         for size in (1024, 32, 16):
             with self.subTest(size=size):
@@ -247,41 +308,36 @@ class BrandAssetsTest(unittest.TestCase):
                 self.assertEqual(first.tobytes(), second.tobytes())
                 self.assertEqual(first.size, (size, size))
                 self.assertEqual(first.getextrema()[3], (255, 255))
+                self.assertEqual(first.getpixel((0, 0))[:3], WHITE)
 
-                points = _white_points(first, threshold=215)
-                self.assertGreaterEqual(len(points), max(8, round(size * size * 0.025)))
-                self.assertLess(len(points), round(size * size * 0.30))
+                points = _blue_points(first)
+                self.assertGreater(len(points), size * size * 0.25)
+                self.assertLess(len(points), size * size * 0.50)
                 xs = [point[0] for point in points]
                 ys = [point[1] for point in points]
-                extent = size - 1
-                self.assertLessEqual(min(xs), round(extent * 0.25))
-                self.assertGreaterEqual(max(xs), round(extent * 0.75))
-                self.assertLessEqual(min(ys), round(extent * 0.27))
-                self.assertGreaterEqual(max(ys), round(extent * 0.72))
+                self.assertLessEqual(min(xs), size * 0.20)
+                self.assertGreaterEqual(max(xs) + 1, size * 0.80)
+                self.assertLessEqual(min(ys), size * 0.20)
+                self.assertGreaterEqual(max(ys) + 1, size * 0.80)
 
-        for invalid_size in (0, -1):
-            with self.subTest(invalid_size=invalid_size):
-                with self.assertRaises(ValueError):
-                    generator.generate_icon(invalid_size)
+        for factory in (generator.generate_icon, generator.generate_maskable_icon,
+                        generator.generate_adaptive_foreground, generator.generate_monochrome_foreground):
+            for invalid_size in (0, -1):
+                with self.subTest(factory=factory.__name__, invalid_size=invalid_size):
+                    with self.assertRaises(ValueError):
+                        factory(invalid_size)
 
     def test_ordinary_maskable_and_adaptive_marks_stay_inside_safe_zones(self):
         generator = load_generator()
-        ordinary = generator.generate_icon(512)
-        ordinary_points = _white_points(ordinary)
+        ordinary_points = _blue_points(generator.generate_icon(512))
         self.assertTrue(ordinary_points)
-        self.assertGreaterEqual(min(x for x, _ in ordinary_points), round(512 * 0.14))
-        self.assertLessEqual(max(x for x, _ in ordinary_points), round(512 * 0.86))
-        self.assertGreaterEqual(min(y for _, y in ordinary_points), round(512 * 0.12))
-        self.assertLessEqual(max(y for _, y in ordinary_points), round(512 * 0.84))
-
-        maskable_factory = getattr(generator, "generate_maskable_icon", None)
-        self.assertTrue(callable(maskable_factory), "maskable launcher generator is required")
-        maskable = maskable_factory(512)
-        self.assertTrue(_close(maskable.convert("RGB").getpixel((8, 8)), BLUE_TOP, tolerance=3))
-        self.assertMaskableSafeZone(maskable)
-
-        adaptive = generator.generate_adaptive_foreground(432)
-        self.assertAdaptiveSafeZone(adaptive)
+        self.assertGreaterEqual(min(x for x, _ in ordinary_points), round(512 * 0.10))
+        self.assertLessEqual(max(x for x, _ in ordinary_points), round(512 * 0.90))
+        self.assertGreaterEqual(min(y for _, y in ordinary_points), round(512 * 0.08))
+        self.assertLessEqual(max(y for _, y in ordinary_points), round(512 * 0.92))
+        self.assertMaskableSafeZone(generator.generate_maskable_icon(512))
+        self.assertAdaptiveSafeZone(generator.generate_adaptive_foreground(432))
+        self.assertAdaptiveSafeZone(generator.generate_monochrome_foreground(432))
 
     def test_platform_assets_cover_every_launcher_target(self):
         expected_sizes = {
@@ -294,6 +350,7 @@ class BrandAssetsTest(unittest.TestCase):
             ROOT / "web/icons/Icon-maskable-192.png": (192, 192),
             ROOT / "web/icons/Icon-maskable-512.png": (512, 512),
             ROOT / ANDROID_RES / "drawable-nodpi/ic_launcher_foreground.png": (432, 432),
+            ROOT / ANDROID_RES / "drawable-nodpi/ic_launcher_monochrome.png": (432, 432),
         }
         android_sizes = {
             "mdpi": 48,
@@ -345,10 +402,112 @@ class BrandAssetsTest(unittest.TestCase):
             for size in sorted(ICO_SIZES):
                 with self.subTest(ico_frame=size):
                     frame = icon.ico.getimage(size).convert("RGB")
-                    self.assertGreater(len(_white_points(frame, threshold=215)), 4)
-                    extrema = frame.getextrema()
-                    self.assertGreaterEqual(extrema[1][0], 140)
-                    self.assertGreaterEqual(extrema[2][0], 250)
+                    self.assertGreater(len(_blue_points(frame)), size[0] * size[1] * 0.25)
+                    self.assertLess(len(_blue_points(frame)), size[0] * size[1] * 0.50)
+                    self.assertEqual(frame.getpixel((0, 0)), WHITE)
+
+    def test_invalid_ios_metadata_does_not_write_any_launcher_assets(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            _prepare_generation_root(target)
+            existing = target / "assets/branding/icon-master.png"
+            existing.parent.mkdir(parents=True)
+            existing.write_bytes(b"existing launcher must survive invalid metadata")
+            metadata_path = target / IOS_APPICON / "Contents.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["images"][0]["size"] = "20x21"
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            before = _hashes([path for path in target.rglob("*") if path.is_file()], target)
+
+            with self.assertRaises(ValueError):
+                generator.write_all_assets(target)
+
+            after = _hashes([path for path in target.rglob("*") if path.is_file()], target)
+            self.assertEqual(before, after, "validate every target before the first write")
+
+    def test_ios_metadata_cannot_target_non_icon_assets(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            _prepare_generation_root(target)
+            metadata_path = target / IOS_APPICON / "Contents.json"
+            original = json.loads(metadata_path.read_text(encoding="utf-8"))
+            for filename in ("../LaunchImage.imageset/LaunchImage.png", "..\\LaunchImage.imageset\\LaunchImage.png", "Contents.json"):
+                with self.subTest(filename=filename):
+                    metadata = json.loads(json.dumps(original))
+                    metadata["images"][0]["filename"] = filename
+                    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+                    before = _hashes([path for path in target.rglob("*") if path.is_file()], target)
+                    with self.assertRaises(ValueError):
+                        generator.write_all_assets(target)
+                    self.assertEqual(before, _hashes([path for path in target.rglob("*") if path.is_file()], target))
+
+    def test_generated_master_is_byte_identical_to_the_final_source(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            _prepare_generation_root(target)
+            generator.write_all_assets(target)
+            for relative in ("assets/branding/icon-master.png", (IOS_APPICON / "Icon-App-1024x1024@1x.png").as_posix()):
+                with self.subTest(master=relative):
+                    self.assertEqual(hashlib.sha256((target / relative).read_bytes()).hexdigest(),
+                                     SOURCE_HASHES["app_icon_1024.png"])
+
+    def test_generation_preserves_non_icon_android_resources(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            _prepare_generation_root(target)
+            colors = target / ANDROID_RES / "values/colors.xml"
+            colors.parent.mkdir(parents=True)
+            colors.write_text(
+                '<resources>\n'
+                '    <!-- Keep the app theme and non-icon resources. -->\n'
+                '    <color name="app_accent">#123456</color>\n'
+                '    <item type="color" name="app_surface">@android:color/white</item>\n'
+                '    <color name="ic_launcher_background_top">#000000</color>\n'
+                '    <color name="ic_launcher_background_bottom">#000000</color>\n'
+                '</resources>\n', encoding="utf-8",
+            )
+            sentinel = target / ANDROID_RES / "drawable/keep_me.xml"
+            sentinel.parent.mkdir(parents=True)
+            sentinel.write_bytes(b"unrelated Android resource")
+            generator.write_all_assets(target)
+            resources = ET.fromstring(colors.read_text(encoding="utf-8"))
+            self.assertEqual(resources.find("color[@name='app_accent']").text, "#123456")
+            self.assertEqual(resources.find("item[@name='app_surface']").text, "@android:color/white")
+            self.assertIn("Keep the app theme", colors.read_text(encoding="utf-8"))
+            for name in ("ic_launcher_background_top", "ic_launcher_background_bottom"):
+                self.assertEqual(resources.find(f"color[@name='{name}']").text, "#FFFFFF")
+            self.assertEqual(sentinel.read_bytes(), b"unrelated Android resource")
+
+    def test_invalid_canonical_input_fails_before_replacing_any_icons(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            target = base / "project"
+            _prepare_generation_root(target)
+            sources = base / "inputs"
+            shutil.copytree(ROOT / "assets/branding/source", sources)
+            Image.new("RGBA", (1, 1)).save(sources / "android_monochrome.png")
+            generator.SOURCE_DIRECTORY = sources
+            before = _hashes([path for path in target.rglob("*") if path.is_file()], target)
+            with self.assertRaises(ValueError):
+                generator.write_all_assets(target)
+            self.assertEqual(before, _hashes([path for path in target.rglob("*") if path.is_file()], target))
+
+    def test_check_rejects_stale_nonrepresentative_asset_without_writing(self):
+        generator = load_generator()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            _prepare_generation_root(target)
+            generator.write_all_assets(target)
+            Image.new("RGBA", (32, 32), (255, 255, 255, 255)).save(target / "assets/branding/icon-32.png")
+            before = _hashes([path for path in target.rglob("*") if path.is_file()], target)
+            with self.assertRaises(SystemExit):
+                generator.check_assets(target)
+            self.assertEqual(before, _hashes([path for path in target.rglob("*") if path.is_file()], target))
 
     def test_launch_images_remain_byte_for_byte_unchanged(self):
         for filename, expected_hash in LAUNCH_HASHES.items():
@@ -364,20 +523,20 @@ class BrandAssetsTest(unittest.TestCase):
             launch_before = _hashes([target / IOS_LAUNCH / name for name in LAUNCH_HASHES], target)
 
             expected_paths = _expected_generated_paths()
-            self.assertEqual(len(expected_paths), 39)
+            self.assertEqual(len(expected_paths), 42)
 
             first_paths = generator.write_all_assets(target)
             first_relative = [path.relative_to(target).as_posix() for path in first_paths]
-            self.assertEqual(len(first_paths), 39)
-            self.assertEqual(len(set(first_paths)), 39)
+            self.assertEqual(len(first_paths), 42)
+            self.assertEqual(len(set(first_paths)), 42)
             self.assertEqual(set(first_relative), expected_paths)
             self.assertGeneratedOutputSemantics(target)
             first_hashes = _hashes(first_paths, target)
 
             second_paths = generator.write_all_assets(target)
             second_relative = [path.relative_to(target).as_posix() for path in second_paths]
-            self.assertEqual(len(second_paths), 39)
-            self.assertEqual(len(set(second_paths)), 39)
+            self.assertEqual(len(second_paths), 42)
+            self.assertEqual(len(set(second_paths)), 42)
             self.assertEqual(second_relative, first_relative)
             second_hashes = _hashes(second_paths, target)
 

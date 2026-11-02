@@ -4,7 +4,10 @@ import '../../application/app_controller.dart';
 import '../../domain/book.dart';
 import '../theme.dart';
 import 'book_cover.dart';
+import 'book_text_rule_sheet.dart';
 import 'common.dart';
+import 'reader_cache_cleanup_sheet.dart';
+import 'reader_cache_sheet.dart';
 import 'source_switch_sheet.dart';
 
 class BookDetails extends StatefulWidget {
@@ -49,7 +52,7 @@ class _BookDetailsState extends State<BookDetails> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF1EDE1),
       constraints: const BoxConstraints(maxWidth: 600),
       builder: (_) =>
           SourceSwitchSheet(controller: widget.controller, book: book),
@@ -58,6 +61,45 @@ class _BookDetailsState extends State<BookDetails> {
       setState(() => _error = null);
       showMessage(context, '已切换到 ${switched.sourceLabel}。');
     }
+  }
+
+  void _cacheChapters(Book book) {
+    if (_busyAction != null || book.chapters.isEmpty) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: AppColors.background,
+      constraints: const BoxConstraints(maxWidth: 600),
+      builder: (_) =>
+          ReaderCacheSheet(controller: widget.controller, book: book),
+    );
+  }
+
+  void _manageCache(Book book) {
+    if (_busyAction != null || book.cachedChapters == 0) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: AppColors.background,
+      constraints: const BoxConstraints(maxWidth: 600),
+      builder: (_) =>
+          ReaderCacheCleanupSheet(controller: widget.controller, book: book),
+    );
+  }
+
+  void _manageTextRules(Book book) {
+    if (_busyAction != null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: AppColors.background,
+      constraints: const BoxConstraints(maxWidth: 600),
+      builder: (_) =>
+          BookTextRuleSheet(controller: widget.controller, book: book),
+    );
   }
 
   Future<void> _read(Book book) async {
@@ -155,7 +197,39 @@ class _BookDetailsState extends State<BookDetails> {
                         : const Icon(Icons.image_search_outlined, size: 18),
                     label: const Text('刷新封面'),
                   ),
+                  if (book.chapters.isNotEmpty)
+                    OutlinedButton.icon(
+                      key: const Key('book-cache-chapters'),
+                      onPressed: _busyAction == null
+                          ? () => _cacheChapters(book)
+                          : null,
+                      icon: const Icon(
+                        Icons.download_for_offline_outlined,
+                        size: 18,
+                      ),
+                      label: const Text('缓存章节'),
+                    ),
+                  if (book.cachedChapters > 0)
+                    OutlinedButton.icon(
+                      key: const Key('book-manage-cache'),
+                      onPressed: _busyAction == null
+                          ? () => _manageCache(book)
+                          : null,
+                      icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                      label: const Text('管理缓存'),
+                    ),
                 ],
+              ),
+            ],
+            if (shelfBook != null) ...[
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                key: const Key('book-text-rules'),
+                onPressed: _busyAction == null
+                    ? () => _manageTextRules(book)
+                    : null,
+                icon: const Icon(Icons.text_fields, size: 18),
+                label: const Text('正文替换'),
               ),
             ],
             const SizedBox(height: 28),

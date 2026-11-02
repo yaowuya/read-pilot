@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../domain/book.dart';
+import 'local_book_id.dart';
 
 class TxtImporter {
   static const maxBytes = 2 * 1024 * 1024;
@@ -24,7 +25,7 @@ class TxtImporter {
         .last
         .replaceFirst(RegExp(r'\.txt$', caseSensitive: false), '')
         .trim();
-    final id = 'local-${DateTime.now().microsecondsSinceEpoch}';
+    final id = LocalBookId.next();
     final chapters = <Chapter>[];
     var chapterTitle = '正文';
     var paragraphs = <String>[];

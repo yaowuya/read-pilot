@@ -5,6 +5,7 @@ import '../../application/app_controller.dart';
 import '../../domain/book.dart';
 import '../components/book_cover.dart';
 import '../components/common.dart';
+import '../components/shelf_group_sheets.dart';
 import '../theme.dart';
 
 class BookshelfScreen extends StatefulWidget {
@@ -29,19 +30,44 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
   String _query = '';
   int _filter = 0;
   String _sort = '最近阅读';
+  String? _selectedGroupId;
   bool _list = false;
+
+  void _manageGroups() => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    backgroundColor: AppColors.background,
+    constraints: const BoxConstraints(maxWidth: 600),
+    builder: (_) => ShelfGroupManagerSheet(controller: widget.controller),
+  );
+
+  void _editBookGroups(Book book) => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    backgroundColor: AppColors.background,
+    constraints: const BoxConstraints(maxWidth: 600),
+    builder: (_) =>
+        ShelfBookGroupsSheet(controller: widget.controller, bookId: book.id),
+  );
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 650;
       final padding = compact ? 20.0 : 40.0;
+      final selectedGroup = widget.controller.shelfGroups
+          .where((group) => group.id == _selectedGroupId)
+          .firstOrNull;
       final books =
           widget.controller.books.where((book) {
             final matches = '${book.title} ${book.author}'
                 .toLowerCase()
                 .contains(_query.toLowerCase());
             return matches &&
+                (selectedGroup == null ||
+                    selectedGroup.containsBook(book.id)) &&
                 (_filter == 0 ||
                     (_filter == 1
                         ? book.hasStarted && !book.finished
@@ -82,18 +108,21 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                       ? IconButton.filled(
                           key: const Key('import-book'),
                           onPressed: widget.onImport,
-                          tooltip: '导入 TXT',
+                          tooltip: '批量导入 TXT 或 EPUB',
                           icon: const Icon(Icons.add),
                         )
                       : FilledButton.icon(
                           key: const Key('import-book'),
                           onPressed: widget.onImport,
                           icon: const Icon(Icons.add, size: 19),
-                          label: const Text('导入书籍'),
+                          label: const Text('批量导入'),
                         ),
                 ),
                 const SizedBox(height: 28),
-                if (recent != null && _query.isEmpty && _filter == 0) ...[
+                if (recent != null &&
+                    selectedGroup == null &&
+                    _query.isEmpty &&
+                    _filter == 0) ...[
                   _ContinueReading(
                     book: recent,
                     controller: widget.controller,
@@ -147,6 +176,59 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Text(
+                      '书架分组',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      key: const Key('shelf-group-manage'),
+                      onPressed: _manageGroups,
+                      icon: const Icon(Icons.tune, size: 18),
+                      label: const Text('管理分组'),
+                    ),
+                  ],
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ChoiceChip(
+                          key: const Key('shelf-group-all'),
+                          label: const Text('全部书籍'),
+                          selected: selectedGroup == null,
+                          showCheckmark: false,
+                          selectedColor: AppColors.softBlue,
+                          onSelected: (_) =>
+                              setState(() => _selectedGroupId = null),
+                        ),
+                      ),
+                      for (final group in widget.controller.shelfGroups)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            key: Key('shelf-group-${group.id}'),
+                            label: Text(
+                              group.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            selected: selectedGroup?.id == group.id,
+                            showCheckmark: false,
+                            selectedColor: AppColors.softBlue,
+                            onSelected: (_) =>
+                                setState(() => _selectedGroupId = group.id),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
                 Row(
                   children: [
                     Text(
@@ -187,16 +269,28 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
               padding: EdgeInsets.all(padding),
               sliver: SliverToBoxAdapter(
                 child: EmptyState(
-                  title: _query.isNotEmpty ? '没有找到这本书' : '给好书留个位置',
+                  title: _query.isNotEmpty
+                      ? '没有找到这本书'
+                      : selectedGroup != null
+                      ? '分组里还没有书'
+                      : '给好书留个位置',
                   description: _query.isNotEmpty
                       ? '换一个书名或作者试试。'
+                      : selectedGroup != null
+                      ? '从书籍的更多操作中选择“加入分组”。'
                       : '从公版书库挑一本，或导入自己的 TXT。',
-                  action: _query.isEmpty
+                  action: _query.isNotEmpty
+                      ? null
+                      : selectedGroup != null
                       ? OutlinedButton(
+                          onPressed: () =>
+                              setState(() => _selectedGroupId = null),
+                          child: const Text('查看全部书籍'),
+                        )
+                      : OutlinedButton(
                           onPressed: widget.onDiscover,
                           child: const Text('去发现好书'),
-                        )
-                      : null,
+                        ),
                 ),
               ),
             )
@@ -355,11 +449,16 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
     iconSize: 19,
     itemBuilder: (_) => [
       const PopupMenuItem(value: 'details', child: Text('书籍信息')),
+      const PopupMenuItem(value: 'groups', child: Text('加入分组')),
       const PopupMenuItem(value: 'remove', child: Text('移出书架')),
     ],
     onSelected: (value) async {
       if (value == 'details') {
         widget.onDetails(book);
+        return;
+      }
+      if (value == 'groups') {
+        _editBookGroups(book);
         return;
       }
       if (!await confirmRemoval(

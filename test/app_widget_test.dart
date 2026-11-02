@@ -35,6 +35,7 @@ void main() {
     expect(find.text('阅航'), findsNothing);
     expect(find.bySemanticsLabel('阅读标志'), findsOneWidget);
     expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
+    expect(find.byTooltip('批量导入 TXT 或 EPUB'), findsOneWidget);
     expect(find.byType(NavigationBar), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -130,6 +131,22 @@ void main() {
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
     expect(find.text('我的书架'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('profile opens bounded local reading history', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(ReadPilotApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('我的'));
+    await tester.pumpAndSettle();
+    expect(find.text('阅读足迹'), findsOneWidget);
+    await tester.tap(find.text('阅读足迹'));
+    await tester.pumpAndSettle();
+    expect(find.text('每一次翻页，都在这里'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

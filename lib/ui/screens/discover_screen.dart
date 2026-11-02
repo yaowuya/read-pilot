@@ -31,6 +31,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   bool _searching = false;
   bool _loadingMore = false;
   bool _hasMore = false;
+  bool _cancelledSearch = false;
   int _page = 0;
   int _generation = 0;
   Completer<void>? _abort;
@@ -58,6 +59,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         _submitted = query;
         _activeExplore = null;
         _searching = query.isNotEmpty;
+        _loadingMore = false;
+        _cancelledSearch = false;
         _remote = [];
         _page = 0;
         _hasMore = false;
@@ -104,6 +107,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         _submitted = '';
         _activeExplore = category;
         _searching = true;
+        _cancelledSearch = false;
         _remote = [];
         _page = 0;
         _hasMore = false;
@@ -167,6 +171,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     setState(() {
       _searching = false;
       _loadingMore = false;
+      _cancelledSearch = true;
       _abort = null;
     });
   }
@@ -176,6 +181,14 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 650;
       final busy = _searching || _loadingMore;
+      final showingRemote = _submitted.isNotEmpty || _activeExplore != null;
+      final resultCount = _remote
+          .where((group) => group.error == null)
+          .fold(0, (total, group) => total + group.books.length);
+      final sourceCount = _remote
+          .map((group) => group.source.id)
+          .toSet()
+          .length;
       final books = widget.controller.catalog
           .where(
             (book) =>
@@ -184,21 +197,41 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           )
           .toList();
       return ListView(
-        padding: EdgeInsets.all(compact ? 20 : 40),
+        padding: EdgeInsets.all(compact ? 16 : 32),
         children: [
-          const PageHeading(title: '发现好书', subtitle: '在字里行间，遇见更大的世界。'),
-          const SizedBox(height: 28),
+          Semantics(
+            header: true,
+            child: Text(
+              '搜索',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+          ),
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
-                child: TextField(
-                  key: const Key('discover-search'),
-                  controller: _query,
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: (_) => _search(),
-                  decoration: const InputDecoration(
-                    hintText: '找一本书，也找一种心境',
-                    prefixIcon: Icon(Icons.search, size: 21),
+                child: ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _query,
+                  builder: (context, value, child) => TextField(
+                    key: const Key('discover-search'),
+                    controller: _query,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => _search(),
+                    decoration: InputDecoration(
+                      hintText: '搜索书名、作者',
+                      prefixIcon: const Icon(Icons.search, size: 21),
+                      isDense: true,
+                      suffixIcon: value.text.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: '清除搜索',
+                              onPressed: () {
+                                _query.clear();
+                                _search();
+                              },
+                              icon: const Icon(Icons.close, size: 18),
+                            ),
+                    ),
                   ),
                 ),
               ),
@@ -209,56 +242,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          Wrap(
-            spacing: 10,
-            children: [
-              for (final category in ['全部', '文学', '诗词', '哲思'])
-                ChoiceChip(
-                  label: Text(category),
-                  selected: _category == category,
-                  showCheckmark: false,
-                  selectedColor: const Color(0xFFE8EBEF),
-                  side: BorderSide.none,
-                  onSelected: (_) => setState(() => _category = category),
-                ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Text(
-                _submitted.isEmpty ? '值得重读的经典' : '本地书库',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const Spacer(),
-              const Text(
-                '公版 · 离线可读',
-                style: TextStyle(fontSize: 12, color: AppColors.muted),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            '原文节选，慢慢读。不需要账号，也不需要网络。',
-            style: TextStyle(color: AppColors.muted, fontSize: 13),
-          ),
-          const SizedBox(height: 20),
-          if (books.isEmpty)
-            const EmptyState(
-              title: '本地书库没有匹配结果',
-              description: '试试其他关键词，或添加你自己的授权书源。',
-            ),
-          for (final book in books)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: _BookResult(
-                book: book,
-                controller: widget.controller,
-                inShelf: widget.controller.book(book.id) != null,
-                onTap: () => widget.onDetails(book),
-              ),
-            ),
+          if (!showingRemote) ..._catalogResults(books),
           if (_submitted.isEmpty &&
               widget.controller.exploreCategories.isNotEmpty) ...[
             const SizedBox(height: 24),
@@ -278,23 +262,36 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               ],
             ),
           ],
-          if (_submitted.isNotEmpty || _activeExplore != null) ...[
+          if (showingRemote) ...[
             const SizedBox(height: 20),
             Row(
               children: [
-                Text(
-                  _activeExplore == null
-                      ? '我的书源'
-                      : '${_activeExplore!.entry.title} · '
-                            '${_activeExplore!.source.name}',
-                  style: Theme.of(context).textTheme.titleLarge,
+                Expanded(
+                  child: Text(
+                    _activeExplore == null
+                        ? '搜索结果'
+                        : '${_activeExplore!.entry.title} · '
+                              '${_activeExplore!.source.name}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
                 ),
-                const Spacer(),
                 TextButton(
                   onPressed: widget.onSources,
                   child: const Text('管理书源'),
                 ),
               ],
+            ),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                _searching
+                    ? '正在搜索书源…'
+                    : '网络结果 $resultCount · 已查 $sourceCount 个书源',
+                key: const Key('discover-result-count'),
+                style: const TextStyle(fontSize: 13, color: AppColors.muted),
+              ),
             ),
             const SizedBox(height: 12),
             if (_searching)
@@ -304,19 +301,26 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               ),
             if (!_searching && _remote.isEmpty)
               EmptyState(
-                title: _activeExplore == null ? '还没有启用的网络书源' : '这个分类暂时没有书籍',
-                description: _activeExplore == null
+                title: _cancelledSearch
+                    ? '已取消搜索。'
+                    : _activeExplore == null
+                    ? '还没有启用的网络书源'
+                    : '这个分类暂时没有书籍',
+                description: _cancelledSearch
+                    ? '可以调整关键词后重新搜索。'
+                    : _activeExplore == null
                     ? '在“书源”中导入你有权访问的书库配置，再来搜索。'
                     : '可以稍后重试，或选择其他书源分类。',
               ),
             for (final group in _remote) ...[
-              Padding(
-                padding: const EdgeInsets.only(top: 16, bottom: 14),
-                child: Text(
-                  group.source.name,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+              if (group.error != null || group.books.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16, bottom: 10),
+                  child: Text(
+                    group.source.name,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                 ),
-              ),
               if (group.error != null)
                 QuietPanel(
                   child: Column(
@@ -349,14 +353,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 )
               else
                 for (final book in group.books)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 14),
-                    child: _BookResult(
-                      book: book,
-                      controller: widget.controller,
-                      inShelf: widget.controller.book(book.id) != null,
-                      onTap: () => widget.onDetails(book),
-                    ),
+                  _BookResult(
+                    book: book,
+                    controller: widget.controller,
+                    inShelf: widget.controller.book(book.id) != null,
+                    onTap: () => widget.onDetails(book),
                   ),
             ],
             if (_remote.isNotEmpty && (_hasMore || _loadingMore))
@@ -372,6 +373,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   ),
                 ),
               ),
+            ..._catalogResults(books),
           ] else ...[
             const SizedBox(height: 12),
             QuietPanel(
@@ -398,6 +400,52 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       );
     },
   );
+
+  List<Widget> _catalogResults(List<Book> books) => [
+    const SizedBox(height: 24),
+    Wrap(
+      spacing: 8,
+      children: [
+        for (final category in ['全部', '文学', '诗词', '哲思'])
+          ChoiceChip(
+            label: Text(category),
+            selected: _category == category,
+            showCheckmark: false,
+            selectedColor: const Color(0xFFE8EBEF),
+            side: BorderSide.none,
+            onSelected: (_) => setState(() => _category = category),
+          ),
+      ],
+    ),
+    const SizedBox(height: 16),
+    Row(
+      children: [
+        Expanded(
+          child: Text(
+            _submitted.isEmpty ? '值得重读的经典' : '本地结果 ${books.length}',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+        ),
+        const Text(
+          '公版 · 离线可读',
+          style: TextStyle(fontSize: 12, color: AppColors.muted),
+        ),
+      ],
+    ),
+    const SizedBox(height: 8),
+    if (books.isEmpty)
+      const EmptyState(
+        title: '本地书库没有匹配结果',
+        description: '试试其他关键词，或添加你自己的授权书源。',
+      ),
+    for (final book in books)
+      _BookResult(
+        book: book,
+        controller: widget.controller,
+        inShelf: widget.controller.book(book.id) != null,
+        onTap: () => widget.onDetails(book),
+      ),
+  ];
 }
 
 class _BookResult extends StatelessWidget {
@@ -412,59 +460,81 @@ class _BookResult extends StatelessWidget {
   final bool inShelf;
   final VoidCallback onTap;
   @override
-  Widget build(BuildContext context) => QuietPanel(
-    padding: const EdgeInsets.all(20),
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
     child: InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          BookCover(
-            book: book,
-            imageLoader: controller.loadBookCover,
-            width: 78,
-            height: 110,
-          ),
-          const SizedBox(width: 22),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  book.title,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${book.author} · ${book.category}',
-                  style: const TextStyle(fontSize: 12, color: AppColors.muted),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  book.description.isEmpty
-                      ? '来自 ${book.sourceLabel}'
-                      : book.description,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    height: 1.7,
-                    color: AppColors.muted,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  inShelf ? '已在书架' : '查看这本书  →',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: inShelf ? AppColors.muted : AppColors.blue,
-                  ),
-                ),
-              ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            BookCover(
+              book: book,
+              imageLoader: controller.loadBookCover,
+              width: 64,
+              height: 92,
             ),
-          ),
-        ],
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    book.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    [
+                      book.author,
+                      book.category,
+                    ].where((value) => value.trim().isNotEmpty).join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '来源：${book.sourceLabel}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                  if (book.description.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      book.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        height: 1.6,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                  ],
+                  if (inShelf) ...[
+                    const SizedBox(height: 6),
+                    const Text(
+                      '已在书架',
+                      style: TextStyle(fontSize: 12, color: AppColors.muted),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     ),
   );

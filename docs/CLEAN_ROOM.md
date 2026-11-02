@@ -2,7 +2,7 @@
 
 ## 目标
 
-本项目保持 MIT 许可，以 Dart/Flutter 独立实现 Legado 书源公开格式和可观察行为。研究对象固定为 `HapeLee/legado-with-MD3@d5f4bebb8ddc1e84a590cce0ceaf566481c3c0e7`。
+本项目保持 MIT 许可，以 Dart/Flutter 独立实现 Legado 书源公开格式和可观察行为。研究对象固定为 `HapeLee/legado-with-MD3@b21025d3769ec9c4028514914f3c555a1ba284b8`。
 
 ## 允许的互操作依据
 

@@ -11,12 +11,16 @@ import 'screens/discover_screen.dart';
 import 'screens/notes_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/reader_screen.dart';
+import 'screens/reading_history_screen.dart';
 import 'screens/sources_screen.dart';
 import 'theme.dart';
 
+typedef LocalBookFilePicker = Future<List<LocalImportFile>?> Function();
+
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.controller});
+  const AppShell({super.key, required this.controller, this.pickLocalFiles});
   final AppController controller;
+  final LocalBookFilePicker? pickLocalFiles;
   @override
   State<AppShell> createState() => _AppShellState();
 }
@@ -71,25 +75,44 @@ class _AppShellState extends State<AppShell> {
         BookDetails(book: book, controller: widget.controller, onRead: _open),
   );
 
+  Future<List<LocalImportFile>?> _pickLocalFiles() async {
+    final picker = widget.pickLocalFiles;
+    if (picker != null) return picker();
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['txt', 'epub'],
+      allowMultiple: true,
+      withData: true,
+    );
+    if (result == null) return null;
+
+    final files = <LocalImportFile>[];
+    for (final file in result.files) {
+      final bytes = file.bytes;
+      if (bytes == null) {
+        throw const FormatException('无法读取文件，请重新选择本地 TXT 或 EPUB。');
+      }
+      files.add((bytes: bytes, fileName: file.name));
+    }
+    return files;
+  }
+
   Future<void> _import() async {
     if (_importing) return;
     _importing = true;
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['txt'],
-        withData: true,
-      );
-      if (!mounted || result == null) return;
-      final file = result.files.single;
-      if (file.size > 2 * 1024 * 1024) {
-        throw const FormatException('TXT 不能超过 2 MiB，请拆分后导入。');
-      }
-      if (file.bytes == null) throw const FormatException('无法读取文件，请重新选择 TXT。');
-      final book = await widget.controller.importText(file.bytes!, file.name);
+      final files = await _pickLocalFiles();
+      if (!mounted || files == null) return;
+      final books = await widget.controller.importLocalFiles(files);
       if (mounted) {
         _select(0);
-        showMessage(context, '《${book.title}》已加入书架。');
+        final message = switch (books.length) {
+          0 => '所选书籍已在书架中。',
+          1 => '《${books.single.title}》已加入书架。',
+          _ => '已导入 ${books.length} 本书。',
+        };
+        showMessage(context, message);
       }
     } catch (error) {
       if (mounted) showMessage(context, errorMessage(error));
@@ -118,6 +141,30 @@ class _AppShellState extends State<AppShell> {
     ),
   );
 
+  void _history() => Navigator.push(
+    context,
+    MaterialPageRoute<void>(
+      builder: (_) => ReadingHistoryScreen(
+        controller: widget.controller,
+        onOpen: (activity) {
+          final book = widget.controller.book(activity.bookId);
+          if (book == null ||
+              book.sourceId != activity.sourceId ||
+              activity.chapterIndex < 0 ||
+              activity.chapterIndex >= book.chapters.length ||
+              book.chapters[activity.chapterIndex].id != activity.chapterId) {
+            showMessage(context, '书籍来源或章节已变化，无法打开这条阅读足迹。');
+            return;
+          }
+          _open(
+            book,
+            position: ReadingPosition(chapterIndex: activity.chapterIndex),
+          );
+        },
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller,
@@ -140,7 +187,11 @@ class _AppShellState extends State<AppShell> {
               onSources: () => _select(2),
             ),
             SourcesScreen(controller: widget.controller),
-            ProfileScreen(controller: widget.controller, onNotes: _notes),
+            ProfileScreen(
+              controller: widget.controller,
+              onNotes: _notes,
+              onHistory: _history,
+            ),
           ],
         );
         return Scaffold(

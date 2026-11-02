@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:read_pilot/domain/reader_settings.dart';
+import 'package:read_pilot/domain/reader_style_preset.dart';
 import 'package:read_pilot/ui/components/reader_preferences.dart';
 import 'package:read_pilot/ui/reader/reader_paragraph.dart';
 
@@ -164,6 +165,121 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     pending.complete();
     await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'relaxed preset changes typography without resetting reader mode',
+    (tester) async {
+      var saved = const ReaderSettings(
+        theme: ReaderTheme.dark,
+        flow: ReaderFlow.scrolling,
+        boldText: true,
+      );
+      await _open(
+        tester,
+        settings: saved,
+        onChanged: (value) async => saved = value,
+      );
+
+      await tester.tap(find.byKey(const Key('reader-preset-relaxed')));
+      await tester.pumpAndSettle();
+
+      expect(saved.fontSize, 24);
+      expect(saved.lineHeight, 2.1);
+      expect(saved.paragraphSpacing, 28);
+      expect(saved.theme, ReaderTheme.dark);
+      expect(saved.flow, ReaderFlow.scrolling);
+      expect(saved.boldText, isTrue);
+    },
+  );
+
+  testWidgets('named local presets save and apply without theme reset', (
+    tester,
+  ) async {
+    var settings = const ReaderSettings();
+    final presets = [
+      ReaderStylePreset(
+        id: 'night',
+        name: '夜读',
+        settings: const ReaderSettings(
+          theme: ReaderTheme.dark,
+          flow: ReaderFlow.scrolling,
+          fontSize: 24,
+          lineHeight: 2.1,
+          paragraphSpacing: 28,
+        ),
+        createdAt: DateTime.utc(2026),
+      ),
+    ];
+    String? savedName;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ReaderPreferences(
+              settings: settings,
+              onChanged: (value) async => settings = value,
+              stylePresets: presets,
+              onSaveStylePreset: (name, value) async => savedName = name,
+              onDeleteStylePreset: (_) async {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('reader-style-preset-night')));
+    await tester.pumpAndSettle();
+    expect(settings.theme, ReaderTheme.dark);
+    expect(settings.flow, ReaderFlow.scrolling);
+
+    await tester.tap(find.byKey(const Key('reader-style-preset-add')));
+    await tester.pump();
+    final name = find.byKey(const Key('reader-style-preset-name'));
+    await tester.ensureVisible(name);
+    await tester.enterText(name, '当前样式');
+    await tester.tap(find.byKey(const Key('reader-style-preset-save')));
+    await tester.pumpAndSettle();
+    expect(savedName, '当前样式');
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('local palette preserves unrelated reader preferences', (
+    tester,
+  ) async {
+    var saved = const ReaderSettings(
+      flow: ReaderFlow.scrolling,
+      fontSize: 26,
+      lineHeight: 2.1,
+      paragraphSpacing: 28,
+      boldText: true,
+    );
+    await _open(
+      tester,
+      settings: saved,
+      onChanged: (value) async => saved = value,
+    );
+
+    final sage = find.byKey(const Key('reader-theme-sage'));
+    await tester.ensureVisible(sage);
+    await tester.tap(sage);
+    await tester.pumpAndSettle();
+
+    expect(saved.theme, ReaderTheme.sage);
+    expect(saved.flow, ReaderFlow.scrolling);
+    expect(saved.fontSize, 26);
+    expect(saved.lineHeight, 2.1);
+    expect(saved.paragraphSpacing, 28);
+    expect(saved.boldText, isTrue);
+  });
+  testWidgets('local palette choices wrap on a narrow phone', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await _open(tester, onChanged: (_) async {});
+
+    for (final theme in ReaderTheme.values) {
+      expect(find.byKey(Key('reader-theme-${theme.name}')), findsOneWidget);
+    }
     expect(tester.takeException(), isNull);
   });
 }

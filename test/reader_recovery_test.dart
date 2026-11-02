@@ -356,6 +356,108 @@ void main() {
     expect(controller.book(_bookId)!.position.paragraphIndex, saved);
   });
 
+  testWidgets('center tap toggles reading chrome without repagination', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(375, 812));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(
+      () => controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.paged),
+      ),
+    );
+    await openReader(tester);
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final pageController = tester.widget<PageView>(paged).controller;
+    final page = pageController!.page;
+    final anchor = controller.book(_bookId)!.position.paragraphIndex;
+    final center = tester.getRect(paged).center;
+
+    expect(find.byKey(const Key('reader-back')), findsOneWidget);
+    expect(find.byKey(const Key('reader-settings')), findsOneWidget);
+    await tester.tapAt(center);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-back')), findsNothing);
+    expect(find.byKey(const Key('reader-settings')), findsNothing);
+    expect(find.byKey(const Key('reader-compact-heading')), findsOneWidget);
+    expect(find.byKey(const Key('reader-reading-progress')), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^\d+/\d+$')), findsNothing);
+    expect(tester.widget<PageView>(paged).controller, same(pageController));
+    expect(pageController.page, page);
+    expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
+
+    await tester.tapAt(center);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-back')), findsOneWidget);
+    expect(find.byKey(const Key('reader-settings')), findsOneWidget);
+    expect(tester.widget<PageView>(paged).controller, same(pageController));
+    expect(pageController.page, page);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('page edges still turn pages while controls are hidden', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.paged),
+      );
+      await controller.savePosition(_bookId, const ReadingPosition());
+    });
+    await openReader(tester);
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final pages = tester.widget<PageView>(paged).controller!;
+    final viewport = tester.getRect(paged);
+    await tester.tapAt(viewport.center);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-reading-progress')), findsOneWidget);
+    await tester.tapAt(Offset(viewport.right - 12, viewport.center.dy));
+    await tester.pumpAndSettle();
+    expect(pages.page, 1);
+    expect(find.byKey(const Key('reader-back')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('scrolling text also toggles chrome without losing position', (
+    tester,
+  ) async {
+    await openReader(tester);
+    final scrolling = find.byKey(const Key('reader-scrolling-view'));
+    final scrollController = tester
+        .widget<SingleChildScrollView>(scrolling)
+        .controller;
+    await tester.drag(scrolling, const Offset(0, -180));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-back')), findsOneWidget);
+    final offset = scrollController!.offset;
+    await tester.tapAt(tester.getRect(scrolling).center);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-back')), findsNothing);
+    expect(scrollController.offset, offset);
+    await tester.tapAt(tester.getRect(scrolling).center);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-back')), findsOneWidget);
+    expect(scrollController.offset, offset);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'reading toolbar theme shortcut saves without moving the anchor',
+    (tester) async {
+      await openReader(tester);
+      final anchor = controller.book(_bookId)!.position.paragraphIndex;
+      await tester.tap(find.byKey(const Key('reader-theme-toggle')));
+      await tester.pumpAndSettle();
+      expect(controller.settings.theme, ReaderTheme.dark);
+      expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
+      await tester.tap(find.byKey(const Key('reader-theme-toggle')));
+      await tester.pumpAndSettle();
+      expect(controller.settings.theme, ReaderTheme.paper);
+      expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('tapping page edges animates paging and the middle stays put', (
     tester,
   ) async {
@@ -383,6 +485,13 @@ void main() {
     expect(pages.page, lessThan(1));
     await tester.pumpAndSettle();
     expect(pages.page, 1);
+    await tester.pump(const Duration(seconds: 2));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pumpAndSettle();
+    expect(pages.page, 1);
+    expect(find.byKey(const Key('reader-back')), findsOneWidget);
 
     await tester.tapAt(rect.center);
     await tester.pumpAndSettle();
@@ -517,6 +626,31 @@ void main() {
     }
   });
 
+  testWidgets('reader search opens a cached hit without network access', (
+    tester,
+  ) async {
+    await openReader(tester);
+    await tester.tap(find.byKey(const Key('reader-search')));
+    await tester.pumpAndSettle();
+    expect(find.text('仅检索已缓存的 1 / 2 章'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('reader-search-query')),
+      'First chapter 10',
+    );
+    await tester.tap(find.byKey(const Key('reader-search-submit')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-search-hit-0-10')));
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    expect(controller.book(_bookId)!.position.paragraphIndex, 10);
+    expect(engine.requests, 0);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('directory order persists and still opens the original chapter', (
     tester,
   ) async {
@@ -592,7 +726,9 @@ void main() {
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('reader-flow-paged')));
+    final paged = find.byKey(const Key('reader-flow-paged'));
+    await tester.ensureVisible(paged);
+    await tester.tap(paged);
     await tester.pumpAndSettle();
 
     expect(controller.settings.flow, ReaderFlow.paged);
@@ -726,6 +862,98 @@ void main() {
         heading.textScaler ??
         MediaQuery.textScalerOf(tester.element(headingFinder));
     expect(scaler.scale(26), 26);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('theme-only change keeps the current paged screen', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await controller.updateSettings(
+        controller.settings.copyWith(
+          flow: ReaderFlow.paged,
+          theme: ReaderTheme.sage,
+        ),
+      );
+      await controller.savePosition(_bookId, const ReadingPosition());
+    });
+    await openReader(tester);
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final pages = tester.widget<PageView>(paged).controller!;
+    final viewport = tester.getRect(paged);
+    await tester.tapAt(Offset(viewport.right - 12, viewport.center.dy));
+    await tester.pumpAndSettle();
+    expect(pages.page, 1);
+
+    await tester.tap(find.byKey(const Key('reader-theme-toggle')));
+    await tester.pumpAndSettle();
+    expect(controller.settings.theme, ReaderTheme.dark);
+    expect(tester.widget<PageView>(paged).controller, same(pages));
+    expect(pages.page, 1);
+
+    await tester.tap(find.byKey(const Key('reader-theme-toggle')));
+    await tester.pumpAndSettle();
+    expect(controller.settings.theme, ReaderTheme.sage);
+    expect(tester.widget<PageView>(paged).controller, same(pages));
+    expect(pages.page, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('reading controls fit a narrow phone at large text scale', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: ReaderScreen(controller: controller, bookId: _bookId),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-settings')), findsOneWidget);
+    expect(find.byKey(const Key('reader-theme-toggle')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('reader-next')),
+        matching: find.byIcon(Icons.skip_next),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('下一章'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('chapter load failure restores hidden reader controls', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.paged),
+      );
+      await controller.savePosition(_bookId, const ReadingPosition());
+    });
+    await openReader(tester);
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final pages = tester.widget<PageView>(paged).controller!;
+    await tester.tapAt(tester.getRect(paged).center);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-back')), findsNothing);
+
+    final nextChapterPage =
+        (pages.position.maxScrollExtent / pages.position.viewportDimension)
+            .round();
+    pages.jumpToPage(nextChapterPage);
+    await tester.pumpAndSettle();
+    expect(find.text('临时网络错误'), findsOneWidget);
+    expect(find.byKey(const Key('reader-back')), findsOneWidget);
+    expect(find.byKey(const Key('reader-settings')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -7,9 +8,10 @@ import 'package:flutter/material.dart';
 import '../../application/app_controller.dart';
 import '../../domain/source_import.dart';
 import '../../services/source_importer.dart';
+import '../theme.dart';
 import 'common.dart';
 
-/// Validates and commits pasted, file-based, or remote source definitions.
+/// Validates source input before users explicitly choose an import subset.
 class SourceImportSheet extends StatefulWidget {
   const SourceImportSheet({super.key, required this.controller});
 
@@ -23,6 +25,8 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
   final _text = TextEditingController();
   final _url = TextEditingController();
   SourceImportKind _mode = SourceImportKind.text;
+  SourceImportPreview? _preview;
+  Set<String> _selectedSourceIds = {};
   String? _fileLabel;
   String? _error;
   bool _busy = false;
@@ -55,7 +59,9 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
       if (!mounted || result == null) return;
       final file = result.files.single;
       if (file.size > SourceImporter.maxBytes) {
-        throw const FormatException('书源文件不能超过 10 MiB。');
+        throw const FormatException(
+          '书源文件不能超过 ${SourceImporter.maxBytesLabel}。',
+        );
       }
       if (file.bytes == null) {
         throw const FormatException('无法读取文件，请重新选择。');
@@ -70,20 +76,20 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
     }
   }
 
-  Future<void> _import() async {
+  SourceImportInput _input() => switch (_mode) {
+    SourceImportKind.text => SourceImportInput.text(_text.text),
+    SourceImportKind.file => SourceImportInput.file(
+      _text.text,
+      label: _fileLabel ?? '书源文件.json',
+    ),
+    SourceImportKind.url => SourceImportInput.url(Uri.parse(_url.text.trim())),
+  };
+
+  Future<void> _prepare() async {
     if (_busy) return;
     final SourceImportInput input;
     try {
-      input = switch (_mode) {
-        SourceImportKind.text => SourceImportInput.text(_text.text),
-        SourceImportKind.file => SourceImportInput.file(
-          _text.text,
-          label: _fileLabel ?? '书源文件.json',
-        ),
-        SourceImportKind.url => SourceImportInput.url(
-          Uri.parse(_url.text.trim()),
-        ),
-      };
+      input = _input();
     } on FormatException {
       setState(() => _error = '请输入完整的 HTTP(S) 书源 JSON 地址。');
       return;
@@ -107,15 +113,12 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
           '已取消导入书源。',
         );
       }
-      // Atomic persistence cannot be cancelled once it has started.
-      setState(() => _committing = true);
-      final result = await widget.controller.commitSourceImport(preview);
-      if (!mounted) return;
-      showMessage(
-        context,
-        '已导入 ${result.total} 个书源（新增 ${result.added}，更新 ${result.updated}）。',
-      );
-      Navigator.pop(context, result);
+      setState(() {
+        _preview = preview;
+        _selectedSourceIds = {for (final source in preview.sources) source.id};
+        _busy = false;
+        _abort = null;
+      });
     } catch (error) {
       if (mounted) {
         setState(() {
@@ -128,13 +131,82 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
     }
   }
 
+  Future<void> _commit() async {
+    final preview = _preview;
+    if (_busy || preview == null || _selectedSourceIds.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _committing = true;
+      _error = null;
+    });
+    try {
+      final result = await widget.controller.commitSourceImport(
+        preview,
+        selectedSourceIds: _selectedSourceIds,
+      );
+      if (!mounted) return;
+      showMessage(
+        context,
+        '已导入 ${result.total} 个书源（新增 ${result.added}，更新 ${result.updated}）。',
+      );
+      Navigator.pop(context, result);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = errorMessage(error);
+          _busy = false;
+          _committing = false;
+        });
+      }
+    }
+  }
+
   void _cancel() {
     if (_committing) return;
     if (!(_abort?.isCompleted ?? true)) _abort!.complete();
   }
 
+  void _backToInput() {
+    if (_busy) return;
+    setState(() {
+      _preview = null;
+      _selectedSourceIds = {};
+      _error = null;
+    });
+  }
+
+  void _selectAll() {
+    final preview = _preview;
+    if (preview == null || _busy) return;
+    setState(() {
+      _selectedSourceIds = {for (final source in preview.sources) source.id};
+    });
+  }
+
+  void _clearSelection() {
+    if (_busy) return;
+    setState(() => _selectedSourceIds = {});
+  }
+
+  void _setSelected(String id, bool selected) {
+    if (_busy) return;
+    setState(() {
+      if (selected) {
+        _selectedSourceIds = {..._selectedSourceIds, id};
+      } else {
+        _selectedSourceIds = _selectedSourceIds
+            .where((item) => item != id)
+            .toSet();
+      }
+    });
+  }
+
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
+  Widget build(BuildContext context) => _preview == null
+      ? _buildInput(context)
+      : _buildPreview(context, _preview!);
+
+  Widget _buildInput(BuildContext context) => SingleChildScrollView(
     padding: EdgeInsets.fromLTRB(
       24,
       0,
@@ -183,7 +255,7 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
             ),
           )
         else ...[
-          if (_mode == SourceImportKind.file)
+          if (_mode == SourceImportKind.file) ...[
             Align(
               alignment: Alignment.centerLeft,
               child: OutlinedButton.icon(
@@ -192,6 +264,12 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
                 label: Text(_fileLabel ?? '选择 JSON 文件'),
               ),
             ),
+            const SizedBox(height: 8),
+            Text(
+              '最大 ${SourceImporter.maxBytesLabel}，仅限 JSON。',
+              style: const TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+          ],
           const SizedBox(height: 8),
           TextField(
             key: const Key('source-json'),
@@ -206,15 +284,7 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
             ),
           ),
         ],
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 14),
-            child: Text(
-              _error!,
-              key: const Key('source-error'),
-              style: const TextStyle(color: Color(0xFFB54444), height: 1.6),
-            ),
-          ),
+        if (_error != null) _errorText(),
         const SizedBox(height: 18),
         if (_busy)
           Row(
@@ -224,11 +294,8 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 12),
-              Expanded(child: Text(_committing ? '正在保存书源…' : '正在获取并导入书源…')),
-              TextButton(
-                onPressed: _committing ? null : _cancel,
-                child: const Text('取消'),
-              ),
+              const Expanded(child: Text('正在检查书源…')),
+              TextButton(onPressed: _cancel, child: const Text('取消')),
             ],
           )
         else
@@ -236,11 +303,131 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
             width: double.infinity,
             child: FilledButton(
               key: const Key('source-import'),
-              onPressed: _import,
-              child: const Text('确认导入'),
+              onPressed: _prepare,
+              child: const Text('检查并预览'),
             ),
           ),
       ],
+    ),
+  );
+
+  Widget _buildPreview(BuildContext context, SourceImportPreview preview) {
+    final height = math.min(640.0, MediaQuery.sizeOf(context).height * .78);
+    return SafeArea(
+      child: SizedBox(
+        key: const Key('source-preview'),
+        height: height,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    key: const Key('source-preview-back'),
+                    tooltip: '返回编辑',
+                    onPressed: _busy ? null : _backToInput,
+                    icon: const Icon(Icons.arrow_back),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '选择要导入的书源',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  Text(
+                    '${_selectedSourceIds.length}/${preview.sources.length}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '检查阶段不会保存书源。只会原子导入你明确选中的来源。',
+                style: TextStyle(color: AppColors.muted, height: 1.7),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton(
+                    key: const Key('source-preview-select-all'),
+                    onPressed: _busy ? null : _selectAll,
+                    child: const Text('全选'),
+                  ),
+                  TextButton(
+                    key: const Key('source-preview-clear-all'),
+                    onPressed: _busy ? null : _clearSelection,
+                    child: const Text('清空'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: preview.sources.length,
+                  itemBuilder: (context, index) {
+                    final source = preview.sources[index];
+                    return CheckboxListTile(
+                      key: Key('source-preview-select-${source.id}'),
+                      value: _selectedSourceIds.contains(source.id),
+                      onChanged: _busy
+                          ? null
+                          : (selected) =>
+                                _setSelected(source.id, selected ?? false),
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(source.name),
+                      subtitle: Text(
+                        source.id,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              if (_error != null) _errorText(),
+              const SizedBox(height: 12),
+              if (_busy)
+                Row(
+                  children: [
+                    const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(child: Text('正在保存书源…')),
+                    TextButton(onPressed: null, child: const Text('取消')),
+                  ],
+                )
+              else
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    key: const Key('source-preview-import'),
+                    onPressed: _selectedSourceIds.isEmpty ? null : _commit,
+                    child: Text('导入选中来源（${_selectedSourceIds.length}）'),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _errorText() => Padding(
+    padding: const EdgeInsets.only(top: 14),
+    child: Text(
+      _error!,
+      key: const Key('source-error'),
+      style: const TextStyle(color: Color(0xFFB54444), height: 1.6),
     ),
   );
 }

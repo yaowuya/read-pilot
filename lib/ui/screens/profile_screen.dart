@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../application/app_controller.dart';
 import '../components/brand_mark.dart';
 import '../components/common.dart';
+import '../components/local_backup_panel.dart';
 import '../components/reader_preferences.dart';
 import '../theme.dart';
 
@@ -11,9 +12,11 @@ class ProfileScreen extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onNotes,
+    required this.onHistory,
   });
   final AppController controller;
   final VoidCallback onNotes;
+  final VoidCallback onHistory;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -90,6 +93,44 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
         ),
+        const SizedBox(height: 18),
+        QuietPanel(
+          child: InkWell(
+            onTap: onHistory,
+            child: Row(
+              children: [
+                const Icon(Icons.history_outlined, color: AppColors.ink),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '阅读足迹',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        '最近保留 ${controller.readingActivities.length} 条本地记录',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.arrow_forward_ios,
+                  size: 16,
+                  color: AppColors.muted,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
+        QuietPanel(child: LocalBackupPanel(controller: controller)),
         const SizedBox(height: 32),
         Text('阅读偏好', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 8),
@@ -102,6 +143,11 @@ class ProfileScreen extends StatelessWidget {
           child: ReaderPreferences(
             settings: controller.settings,
             onChanged: controller.updateSettings,
+            stylePresets: controller.readerStylePresets,
+            onSaveStylePreset: (name, settings) async {
+              await controller.saveReaderStylePreset(name, settings);
+            },
+            onDeleteStylePreset: controller.deleteReaderStylePreset,
           ),
         ),
         const SizedBox(height: 30),
@@ -128,7 +174,7 @@ class ProfileScreen extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               const Text(
-                '书籍、书源、书签和设置仅保存在当前设备；Web 版保存在当前浏览器。清理应用或站点数据会删除这些记录。首版没有云同步，请保留重要 TXT 原文件。',
+                '书籍、书源、书签和设置保存在当前设备；Web 版保存在当前浏览器。清理应用或站点数据会删除这些记录。上方可手动备份本地书籍，备份不包含网络书源；没有云同步，请保留重要 TXT 原文件。',
                 style: TextStyle(
                   fontSize: 12,
                   height: 1.9,

@@ -89,6 +89,47 @@ void main() {
     );
   });
 
+  test('unique selected text becomes one exact highlight span', () {
+    const highlight = ReaderTextHighlight(text: '江南', color: Colors.amber);
+    final span = ReaderParagraph.textSpan(
+      '春风又绿江南岸。',
+      const TextStyle(inherit: false, fontSize: 22),
+      indent: false,
+      highlights: [highlight],
+    );
+    final children = span.children!.whereType<TextSpan>().toList();
+
+    expect(children.map((child) => child.text).join(), '春风又绿江南岸。');
+    expect(
+      children
+          .singleWhere((child) => child.text == '江南')
+          .style!
+          .backgroundColor,
+      Colors.amber.withValues(alpha: .45),
+    );
+  });
+
+  testWidgets('selectable paragraph forwards selected text', (tester) async {
+    String? selected;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReaderParagraph(
+          text: '春风又绿江南岸。',
+          selectable: true,
+          onSelectionChanged: (value) => selected = value,
+          style: const TextStyle(inherit: false, fontSize: 22),
+        ),
+      ),
+    );
+
+    final selectionArea = tester.widget<SelectionArea>(
+      find.byType(SelectionArea),
+    );
+    selectionArea.onSelectionChanged!(const SelectedContent(plainText: '江南'));
+
+    expect(selected, '江南');
+  });
+
   testWidgets('wrapped lines return to the margin after the first line', (
     tester,
   ) async {

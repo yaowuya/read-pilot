@@ -7,6 +7,7 @@ import '../../application/app_controller.dart';
 import '../../domain/book_source.dart';
 import '../components/common.dart';
 import '../components/source_import_sheet.dart';
+import '../components/source_health_sheet.dart';
 import '../theme.dart';
 
 class SourcesScreen extends StatefulWidget {
@@ -160,16 +161,21 @@ class _SourcesScreenState extends State<SourcesScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Row(
+                    Text(
+                      source.enabled ? '已启用 · 连接尚未验证' : '已停用 · 不参与搜索',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 2,
                       children: [
-                        Expanded(
-                          child: Text(
-                            source.enabled ? '已启用 · 连接尚未验证' : '已停用 · 不参与搜索',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.muted,
-                            ),
-                          ),
+                        TextButton(
+                          onPressed: () => _health(source),
+                          child: const Text('检查书源'),
                         ),
                         TextButton(
                           onPressed: () => _view(source),
@@ -242,6 +248,15 @@ class _SourcesScreenState extends State<SourcesScreen> {
     showDragHandle: true,
     constraints: const BoxConstraints(maxWidth: 680),
     builder: (_) => SourceImportSheet(controller: widget.controller),
+  );
+
+  void _health(BookSource source) => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    constraints: const BoxConstraints(maxWidth: 560),
+    builder: (_) =>
+        SourceHealthSheet(controller: widget.controller, source: source),
   );
 
   void _view(BookSource source) {

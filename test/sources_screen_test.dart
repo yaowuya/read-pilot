@@ -139,20 +139,29 @@ void main() {
     await tester.enterText(find.byKey(const Key('source-json')), input);
   }
 
-  testWidgets('import sheet prepares and commits all sources in one action', (
+  testWidgets('import sheet previews then commits only selected sources', (
     tester,
   ) async {
     await openImportSheet(tester);
+    final sources = controller.preview.sources;
 
     expect(find.byKey(const Key('source-preview')), findsNothing);
-    expect(find.byType(Checkbox), findsNothing);
     await tester.tap(find.byKey(const Key('source-import')));
     await tester.pumpAndSettle();
 
+    expect(controller.calls, ['prepare']);
+    expect(controller.committed, isFalse);
+    expect(find.byKey(const Key('source-preview')), findsOneWidget);
+    await tester.tap(
+      find.byKey(Key('source-preview-select-${sources.last.id}')),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('source-preview-import')));
+    await tester.pumpAndSettle();
+
     expect(controller.calls, ['prepare', 'commit']);
-    expect(controller.preparedInput, isA<SourceTextImportInput>());
     expect(controller.committed, isTrue);
-    expect(controller.committedSourceIds, isNull);
+    expect(controller.committedSourceIds, {sources.first.id});
     expect(find.byKey(const Key('source-json')), findsNothing);
   });
 
@@ -163,6 +172,8 @@ void main() {
     await openImportSheet(tester);
 
     await tester.tap(find.byKey(const Key('source-import')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('source-preview-import')));
     await tester.pump();
 
     expect(controller.calls, ['prepare', 'commit']);
@@ -204,11 +215,22 @@ void main() {
 
     await tester.tap(find.byKey(const Key('source-import')));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('source-preview-import')));
+    await tester.pumpAndSettle();
 
     expect(controller.calls, ['prepare', 'commit']);
     expect(controller.committed, isFalse);
-    expect(find.byKey(const Key('source-json')), findsOneWidget);
+    expect(find.byKey(const Key('source-preview')), findsOneWidget);
     expect(find.byKey(const Key('source-error')), findsOneWidget);
     expect(find.textContaining('保存失败'), findsOneWidget);
+  });
+
+  testWidgets('file import discloses the shared 100 MiB limit', (tester) async {
+    await openImportSheet(tester);
+
+    await tester.tap(find.byKey(const Key('source-mode-file')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('最大 100 MiB，仅限 JSON。'), findsOneWidget);
   });
 }
