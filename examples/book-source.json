@@ -1,0 +1,26 @@
+{
+  "bookSourceUrl": "http://localhost:8766",
+  "bookSourceName": "阅读本地验证书源",
+  "bookSourceType": 0,
+  "bookSourceComment": "仅用于测试；需要运行 tool/source_fixture_server.py，不是线上书源。",
+  "enabled": true,
+  "searchUrl": "/search?q={{key}}&page={{page}}",
+  "ruleSearch": {
+    "bookList": "@CSS:.book",
+    "name": "@CSS:a@text",
+    "author": "@CSS:.author@text",
+    "intro": "@CSS:.intro@text",
+    "bookUrl": "@CSS:a@href"
+  },
+  "ruleBookInfo": {
+    "name": "@CSS:h1@text",
+    "intro": "@CSS:.intro@text",
+    "tocUrl": "@CSS:a.toc@href"
+  },
+  "ruleToc": {
+    "chapterList": "@CSS:#chapters a",
+    "chapterName": "@text",
+    "chapterUrl": "@href"
+  },
+  "ruleContent": {"content": "@CSS:article@html"}
+}
