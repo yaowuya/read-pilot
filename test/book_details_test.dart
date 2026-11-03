@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:read_pilot/application/app_controller.dart';
 import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
+import 'package:read_pilot/domain/source_switch_candidate.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/components/book_cover.dart';
 import 'package:read_pilot/ui/components/book_details.dart';
@@ -48,6 +49,20 @@ class _DetailsController extends AppController {
   bool switched = false;
   bool refreshed = false;
 
+  SourceCandidateSearchResult _candidateResult() => SourceCandidateSearchResult(
+    candidates,
+    failedSources: failedSources,
+    candidateInfoById: {
+      for (final candidate in candidates)
+        candidate.id: const SourceCandidateInfo(
+          chapterCount: 1,
+          mappedChapterIndex: 0,
+          mappedChapterTitle: '第一章',
+          wordCount: 2,
+        ),
+    },
+  );
+
   @override
   Book? book(String id) => id == current.id ? current : null;
 
@@ -57,10 +72,7 @@ class _DetailsController extends AppController {
     Future<void>? abortTrigger,
   }) async {
     if (candidateError != null) throw candidateError!;
-    return SourceCandidateSearchResult(
-      candidates,
-      failedSources: failedSources,
-    );
+    return _candidateResult();
   }
 
   @override

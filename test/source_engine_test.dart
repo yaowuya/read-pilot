@@ -9,6 +9,7 @@ import 'package:read_pilot/domain/source_capability.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/services/source_importer.dart';
 import 'package:read_pilot/services/source_runtime/script_runtime.dart';
+import 'package:read_pilot/services/source_runtime/source_transport.dart';
 
 Map<String, dynamic> sourceJson({
   String origin = 'https://books.example',
@@ -1088,6 +1089,71 @@ void main() {
       ),
     );
   });
+
+
+  test(
+    'cancels catalog loading even when the HTTP client ignores abort',
+    () async {
+      final source = importer.parse(jsonEncode(sourceJson())).single;
+      final abort = Completer<void>();
+      final engine = SourceEngine(
+        client: MockClient((_) => Completer<http.Response>().future),
+      );
+      addTearDown(engine.close);
+
+      final pending = engine.loadBook(
+        source,
+        bookResult(),
+        abortTrigger: abort.future,
+      );
+      abort.complete();
+
+      await expectLater(
+        pending.timeout(const Duration(milliseconds: 200)),
+        throwsA(
+          isA<SourceException>().having(
+            (error) => error.message,
+            'message',
+            contains('取消'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'cancels chapter loading even when the HTTP client ignores abort',
+    () async {
+      final source = importer.parse(jsonEncode(sourceJson())).single;
+      final abort = Completer<void>();
+      final engine = SourceEngine(
+        client: MockClient((_) => Completer<http.Response>().future),
+      );
+      addTearDown(engine.close);
+
+      final pending = engine.loadChapter(
+        source,
+        Chapter(
+          id: 'chapter-1',
+          title: '第一章',
+          url: 'https://books.example/chapter/1',
+        ),
+        abortTrigger: abort.future,
+      );
+      abort.complete();
+
+      await expectLater(
+        pending.timeout(const Duration(milliseconds: 200)),
+        throwsA(
+          isA<SourceTransportException>().having(
+            (error) => error.kind,
+            'kind',
+            SourceTransportErrorKind.cancelled,
+          ),
+        ),
+      );
+    },
+  );
 
   test('times out rather than leaving search busy indefinitely', () async {
     final source = importer.parse(jsonEncode(sourceJson())).single;

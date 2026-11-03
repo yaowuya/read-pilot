@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:read_pilot/application/app_controller.dart';
 import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
+import 'package:read_pilot/domain/source_switch_candidate.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/components/source_switch_sheet.dart';
 import 'package:read_pilot/ui/theme.dart';
@@ -23,6 +24,28 @@ Book _book(String id, String source, String author) => Book(
   addedAt: DateTime.utc(2026),
 );
 
+SourceCandidateInfo _readyInfo() => const SourceCandidateInfo(
+  chapterCount: 1,
+  mappedChapterIndex: 0,
+  mappedChapterTitle: '第一章',
+  wordCount: 4,
+);
+
+SourceCandidateSearchResult _withReadyInfo(
+  SourceCandidateSearchResult result,
+) => SourceCandidateSearchResult(
+  result.candidates,
+  failedSources: result.failedSources,
+  unavailableCandidateSourceIds: result.unavailableCandidateSourceIds,
+  candidateInfoById: {
+    for (final candidate in result.candidates)
+      candidate.id: result.infoFor(candidate) ?? _readyInfo(),
+  },
+  pendingMetadata: result.pendingMetadata,
+  fromCache: result.fromCache,
+  loadedAt: result.loadedAt,
+);
+
 class _SwitchController extends AppController {
   _SwitchController(super.repository, super.engine);
 
@@ -33,14 +56,24 @@ class _SwitchController extends AppController {
     _book('a-third', 'Alpha', '另一作者'),
   ];
   int searches = 0;
+  int cacheLookups = 0;
+  int reloads = 0;
   int failedSources = 0;
   int cancellations = 0;
   Object? searchError;
+  SourceCandidateSearchResult? cachedCandidates;
   Future<SourceCandidateSearchResult>? pendingSearch;
   Book? selected;
   int switches = 0;
   Future<Book>? pendingSwitch;
   Object? switchError;
+  bool streamedCandidates = false;
+  bool streamedCandidatesReady = false;
+  int streamedProcessed = 1;
+  int streamedTotal = 400;
+  int streamedPendingMetadata = 0;
+  Completer<void>? streamGate;
+  bool persistReloads = false;
 
   @override
   Future<SourceCandidateSearchResult> findSourceCandidates(
@@ -50,8 +83,86 @@ class _SwitchController extends AppController {
     searches++;
     abortTrigger?.then((_) => cancellations++);
     if (searchError != null) throw searchError!;
-    return pendingSearch ??
-        SourceCandidateSearchResult(candidates, failedSources: failedSources);
+    final pending = pendingSearch;
+    if (pending != null) return _withReadyInfo(await pending);
+    return _withReadyInfo(
+      SourceCandidateSearchResult(candidates, failedSources: failedSources),
+    );
+  }
+
+  @override
+  Future<SourceCandidateSearchResult?> sourceCandidateCacheFor(
+    Book current,
+  ) async {
+    cacheLookups++;
+    final cached = cachedCandidates;
+    if (cached == null) return null;
+    final ready = _withReadyInfo(cached);
+    return SourceCandidateSearchResult(
+      ready.candidates,
+      failedSources: ready.failedSources,
+      candidateInfoById: ready.candidateInfoById,
+      fromCache: true,
+      loadedAt: ready.loadedAt ?? DateTime.now().toUtc(),
+    );
+  }
+
+  @override
+  Future<SourceCandidateSearchResult> reloadSourceCandidatesFor(
+    Book current, {
+    Future<void>? abortTrigger,
+    void Function(
+      SourceCandidateSearchResult partial,
+      int processed,
+      int total,
+    )?
+    onUpdate,
+  }) async {
+    reloads++;
+    final result = await findSourceCandidatesFor(
+      current,
+      abortTrigger: abortTrigger,
+      onUpdate: onUpdate,
+    );
+    // Mirrors the repository write: a complete manual/initial load becomes the
+    // snapshot the next opening restores.
+    if (persistReloads && result.hasCompleteCandidateResults) {
+      cachedCandidates = result;
+    }
+    return result;
+  }
+
+  @override
+  Future<SourceCandidateSearchResult> findSourceCandidatesFor(
+    Book current, {
+    Future<void>? abortTrigger,
+    void Function(
+      SourceCandidateSearchResult partial,
+      int processed,
+      int total,
+    )?
+    onUpdate,
+  }) async {
+    searches++;
+    abortTrigger?.then((_) => cancellations++);
+    if (searchError != null) throw searchError!;
+    if (streamedCandidates && pendingSearch == null) {
+      // Simulate both the old premature update and a metadata-ready live row.
+      final partial = SourceCandidateSearchResult([
+        candidates.first,
+      ], pendingMetadata: streamedPendingMetadata);
+      onUpdate?.call(
+        streamedCandidatesReady ? _withReadyInfo(partial) : partial,
+        streamedProcessed,
+        streamedTotal,
+      );
+      await (streamGate ?? Completer<void>()).future;
+    }
+    final pending = pendingSearch;
+    if (pending != null) return _withReadyInfo(await pending);
+    return _withReadyInfo(
+      SourceCandidateSearchResult(candidates, failedSources: failedSources),
+    );
   }
 
   @override
@@ -127,6 +238,247 @@ void main() {
     expect(sheet.top, lessThan(812 * .15));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'restores cached candidates before requesting a fresh source search',
+    (tester) async {
+      final cached = _book('cached', '缓存书源', '原作者');
+      controller.cachedCandidates = SourceCandidateSearchResult([
+        cached,
+      ], fromCache: true);
+
+      await openSheet(tester);
+      await tester.pumpAndSettle();
+
+      expect(controller.cacheLookups, 1);
+      expect(controller.reloads, 0);
+      expect(controller.searches, 0);
+      expect(find.byKey(const Key('source-candidate-cached')), findsOneWidget);
+      expect(
+        find.byKey(const Key('source-switch-cache-status')),
+        findsOneWidget,
+      );
+      expect(find.text('已恢复上次加载的书源，10 天内可直接选择。'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'manual refresh clears cached candidates and keeps its status unobscured',
+    (tester) async {
+      final cached = _book('cached', '缓存书源', '原作者');
+      controller.cachedCandidates = SourceCandidateSearchResult([
+        cached,
+      ], fromCache: true);
+      await openSheet(tester);
+      await tester.pumpAndSettle();
+      final pending = Completer<SourceCandidateSearchResult>();
+      controller.pendingSearch = pending.future;
+
+      await tester.tap(find.byTooltip('刷新候选'));
+      await tester.pump();
+
+      final status = find.byKey(const Key('source-switch-status'));
+      final loading = find.byKey(const Key('source-switch-loading'));
+      expect(controller.reloads, 1);
+      expect(controller.searches, 1);
+      expect(find.byKey(const Key('source-candidate-cached')), findsNothing);
+      expect(find.byKey(const Key('source-switch-cache-status')), findsNothing);
+      expect(loading, findsOneWidget);
+      expect(status, findsOneWidget);
+      expect(find.text('正在重新加载书源…'), findsOneWidget);
+      final sheetRect = tester.getRect(find.byType(SourceSwitchSheet));
+      final statusRect = tester.getRect(status);
+      final loadingRect = tester.getRect(loading);
+      expect(sheetRect.contains(statusRect.topLeft), isTrue);
+      expect(statusRect.bottom, lessThanOrEqualTo(loadingRect.top));
+      expect(statusRect.overlaps(loadingRect), isFalse);
+      expect(tester.takeException(), isNull);
+
+      pending.complete(
+        SourceCandidateSearchResult([_book('fresh', '新书源', '原作者')]),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('source-candidate-cached')), findsNothing);
+      expect(find.byKey(const Key('source-candidate-fresh')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'fresh streaming cards remain below the pinned manual reload status',
+    (tester) async {
+      final cached = _book('cached', '缓存书源', '原作者');
+      controller
+        ..cachedCandidates = SourceCandidateSearchResult([
+          cached,
+        ], fromCache: true)
+        ..streamedCandidates = true
+        ..streamedCandidatesReady = true
+        ..streamGate = Completer<void>();
+      await openSheet(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('刷新候选'));
+      await tester.pump();
+
+      final status = find.byKey(const Key('source-switch-status'));
+      final freshRow = find.byKey(const Key('source-candidate-z-first'));
+      expect(find.byKey(const Key('source-candidate-cached')), findsNothing);
+      expect(freshRow, findsOneWidget);
+      expect(find.text('正在重新加载书源…（1/400）'), findsOneWidget);
+      final statusRect = tester.getRect(status);
+      final freshRect = tester.getRect(freshRow);
+      expect(statusRect.bottom, lessThanOrEqualTo(freshRect.top));
+      expect(statusRect.overlaps(freshRect), isFalse);
+
+      controller.streamGate!.complete();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('an incomplete refresh clears cached candidates for fresh rows', (
+    tester,
+  ) async {
+    final cached = _book('cached', '缓存书源', '原作者');
+    controller.cachedCandidates = SourceCandidateSearchResult([
+      cached,
+    ], fromCache: true);
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+    final pending = Completer<SourceCandidateSearchResult>();
+    controller.pendingSearch = pending.future;
+
+    await tester.tap(find.byTooltip('刷新候选'));
+    await tester.pump();
+    expect(find.byKey(const Key('source-candidate-cached')), findsNothing);
+    expect(find.byKey(const Key('source-switch-loading')), findsOneWidget);
+    pending.complete(
+      SourceCandidateSearchResult(
+        [_book('partial', '部分书源', '原作者')],
+        failedSources: 1,
+        unavailableCandidateSourceIds: const {'https://unavailable.example'},
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('source-candidate-cached')), findsNothing);
+    expect(find.byKey(const Key('source-candidate-partial')), findsOneWidget);
+    expect(
+      find.byKey(const Key('source-switch-partial-error')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a successful refresh replaces the cached source candidates', (
+    tester,
+  ) async {
+    final cached = _book('cached', '缓存书源', '原作者');
+    controller.cachedCandidates = SourceCandidateSearchResult([
+      cached,
+    ], fromCache: true);
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+    final pending = Completer<SourceCandidateSearchResult>();
+    controller.pendingSearch = pending.future;
+
+    await tester.tap(find.byTooltip('刷新候选'));
+    await tester.pump();
+    pending.complete(
+      SourceCandidateSearchResult([_book('fresh', '新书源', '原作者')]),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('source-candidate-cached')), findsNothing);
+    expect(find.byKey(const Key('source-candidate-fresh')), findsOneWidget);
+    expect(find.byKey(const Key('source-switch-cache-status')), findsNothing);
+    expect(find.text('候选 1 · 1 个书源'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shows mapped chapter and word-count candidate metadata', (
+    tester,
+  ) async {
+    final mapped = _book('mapped', '映射书源', '原作者');
+    controller.cachedCandidates = SourceCandidateSearchResult(
+      [mapped],
+      fromCache: true,
+      candidateInfoById: {
+        mapped.id: const SourceCandidateInfo(
+          chapterCount: 120,
+          mappedChapterIndex: 41,
+          mappedChapterTitle: '风雪归途',
+          wordCount: 123456,
+        ),
+      },
+    );
+
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('source-candidate-chapter-mapped')),
+          )
+          .data,
+      '章节：第 42/120 章 · 风雪归途',
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('source-candidate-word-count-mapped')),
+          )
+          .data,
+      '字数：123456',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'reopening after a completed switch restores the loaded candidates',
+    (tester) async {
+      // 用户报告：换源成功后再次点开换源，应当直接列出上次加载好的源，
+      // 只有点刷新按钮才重新扫描全部书源。
+      controller.persistReloads = true;
+      await openSheet(tester);
+      await tester.pumpAndSettle();
+      expect(controller.reloads, 1);
+      expect(controller.searches, 1);
+      expect(
+        find.byKey(const Key('source-candidate-a-second')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('source-candidate-a-second')));
+      await tester.pumpAndSettle();
+      expect(controller.switches, 1);
+      expect(find.byType(SourceSwitchSheet), findsNothing);
+      final switched = controller.selected!;
+      controller.current = controller.current.rebindSource(
+        switched,
+        position: controller.current.position,
+      );
+
+      await tester.tap(find.text('打开换源'));
+      await tester.pumpAndSettle();
+
+      expect(controller.cacheLookups, 2);
+      expect(controller.reloads, 1);
+      expect(controller.searches, 1);
+      expect(
+        find.byKey(const Key('source-candidate-a-second')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('source-switch-cache-status')),
+        findsOneWidget,
+      );
+      expect(find.text('已恢复上次加载的书源，10 天内可直接选择。'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('filters actual source and author locally with current context', (
     tester,
@@ -296,18 +648,112 @@ void main() {
     },
   );
 
-  testWidgets('closing the sheet cancels its in-flight candidate search', (
+  testWidgets('shows a streamed candidate only after its metadata is ready', (
     tester,
   ) async {
-    final pending = Completer<SourceCandidateSearchResult>();
-    controller.pendingSearch = pending.future;
+    // A source hit alone is not selectable: chapter mapping and word count
+    // must arrive in the same update as its card.
+    controller
+      ..streamedCandidates = true
+      ..streamGate = Completer<void>();
     await openSheet(tester);
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+
     expect(find.byKey(const Key('source-switch-loading')), findsOneWidget);
-    await tester.tap(find.byTooltip('关闭'));
+    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+    expect(find.text('章节：正在加载信息…'), findsNothing);
+    expect(find.text('字数：正在加载…'), findsNothing);
+    expect(find.textContaining('正在查找其他同名书源'), findsOneWidget);
+
+    controller.streamGate!.complete();
     await tester.pumpAndSettle();
-    pending.complete(SourceCandidateSearchResult(controller.candidates));
+
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('source-candidate-chapter-z-first')),
+          )
+          .data,
+      '章节：第 1/1 章 · 第一章',
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('source-candidate-word-count-z-first')),
+          )
+          .data,
+      '字数：4',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('reports pending metadata after source discovery completes', (
+    tester,
+  ) async {
+    controller
+      ..streamedCandidates = true
+      ..streamedProcessed = 400
+      ..streamedTotal = 400
+      ..streamedPendingMetadata = 3
+      ..streamGate = Completer<void>();
+    await openSheet(tester);
+    await tester.pump();
+
+    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+    expect(find.text('正在加载候选章节与字数…（剩余 3）'), findsOneWidget);
+
+    controller.streamGate!.complete();
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'closing while candidate metadata is pending ignores a late ready row',
+    (tester) async {
+      controller
+        ..streamedCandidates = true
+        ..streamGate = Completer<void>();
+      await openSheet(tester);
+      await tester.pump();
+      expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+
+      Navigator.of(tester.element(find.byType(SourceSwitchSheet))).pop();
+      await tester.pumpAndSettle();
+      controller.streamGate!.complete();
+      await tester.pumpAndSettle();
+
+      expect(controller.cancellations, 1);
+      expect(find.byType(SourceSwitchSheet), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('closing a manual refresh ignores its late completion', (
+    tester,
+  ) async {
+    final cached = _book('cached', '缓存书源', '原作者');
+    controller
+      ..cachedCandidates = SourceCandidateSearchResult([
+        cached,
+      ], fromCache: true)
+      ..streamedCandidates = true
+      ..streamedCandidatesReady = true
+      ..streamGate = Completer<void>();
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('刷新候选'));
+    await tester.pump();
+    expect(find.byKey(const Key('source-candidate-cached')), findsNothing);
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+
+    Navigator.of(tester.element(find.byType(SourceSwitchSheet))).pop();
+    await tester.pumpAndSettle();
+    controller.streamGate!.complete();
+    await tester.pumpAndSettle();
+
     expect(controller.cancellations, 1);
     expect(find.byType(SourceSwitchSheet), findsNothing);
     expect(tester.takeException(), isNull);
@@ -401,6 +847,46 @@ void main() {
     expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'manual refresh status remains above fresh cards with the keyboard open',
+    (tester) async {
+      final cached = _book('cached', '缓存书源', '原作者');
+      controller
+        ..cachedCandidates = SourceCandidateSearchResult([
+          cached,
+        ], fromCache: true)
+        ..streamedCandidates = true
+        ..streamedCandidatesReady = true
+        ..streamGate = Completer<void>();
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      addTearDown(tester.view.resetViewInsets);
+      await openSheet(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('刷新候选'));
+      await tester.pump();
+
+      final sheet = find.byType(SourceSwitchSheet);
+      final status = find.byKey(const Key('source-switch-status'));
+      final freshRow = find.byKey(const Key('source-candidate-z-first'));
+      expect(status, findsOneWidget);
+      expect(freshRow, findsOneWidget);
+      final sheetRect = tester.getRect(sheet);
+      final statusRect = tester.getRect(status);
+      final freshRect = tester.getRect(freshRow);
+      expect(statusRect.left, greaterThanOrEqualTo(sheetRect.left));
+      expect(statusRect.right, lessThanOrEqualTo(sheetRect.right));
+      expect(statusRect.top, greaterThanOrEqualTo(sheetRect.top));
+      expect(statusRect.bottom, lessThanOrEqualTo(sheetRect.bottom));
+      expect(statusRect.bottom, lessThanOrEqualTo(freshRect.top));
+      expect(statusRect.overlaps(freshRect), isFalse);
+
+      controller.streamGate!.complete();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('phone keyboard and long metadata leave source controls usable', (
     tester,

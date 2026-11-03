@@ -10,6 +10,7 @@ import '../domain/reader_mark.dart';
 import '../domain/reading_activity.dart';
 import '../domain/shelf_group.dart';
 import '../domain/source_import.dart';
+import '../domain/source_switch_candidate.dart';
 import '../services/book_text_rules.dart';
 import '../services/encrypted_local_backup.dart';
 import '../services/local_backup.dart';
@@ -31,6 +32,9 @@ class AppRepository {
   );
   final _sources = stringMapStoreFactory.store('sources');
   final _sourceStates = stringMapStoreFactory.store('source_state');
+  final _sourceSwitchCandidateCaches = stringMapStoreFactory.store(
+    'source_switch_candidate_cache',
+  );
   final _meta = stringMapStoreFactory.store('meta');
 
   /// Bumped whenever stored chapter text must be re-derived on open.
@@ -140,6 +144,109 @@ class AppRepository {
     for (final record in await _books.find(database))
       Book.fromJson(Map<String, dynamic>.from(record.value)),
   ];
+
+  /// Returns the unexpired source-switch snapshot stored for [bookId].
+  ///
+  /// The snapshot is book-scoped on purpose: a completed source switch, a moved
+  /// reading position and a different target chapter must all keep reusing the
+  /// candidate list the user already loaded instead of scanning every source
+  /// again. Only unreadable or expired records are removed here.
+  Future<SourceCandidateCache?> sourceCandidateCache(
+    String bookId, {
+    DateTime? now,
+  }) async {
+    final record = _sourceSwitchCandidateCaches.record(
+      SourceCandidateCache.recordKey(bookId),
+    );
+    final stored = await record.get(database);
+    if (stored == null) return null;
+    SourceCandidateCache cache;
+    try {
+      cache = SourceCandidateCache.fromJson(Map<String, dynamic>.from(stored));
+    } on FormatException {
+      await record.delete(database);
+      return null;
+    } on TypeError {
+      await record.delete(database);
+      return null;
+    }
+    if (cache.bookId != bookId || !cache.isFreshAt(now ?? DateTime.now())) {
+      await record.delete(database);
+      return null;
+    }
+    return cache;
+  }
+
+  /// Saves the source-switch snapshot for its book.
+  ///
+  /// Returns false when the book is gone or when the write must be skipped:
+  /// a slow search started before a manual refresh must not overwrite a newer
+  /// result (equal request-start times keep the first saved snapshot), and an
+  /// incomplete manual refresh must not replace the snapshot the
+  /// user already has. An incomplete result still seeds a book without any
+  /// snapshot yet — otherwise a book whose source list always contains a few
+  /// dead sources would never cache anything and would rescan on every open.
+  /// When [requireInstalledCandidateSources] is true, the transaction also
+  /// rejects a refresh whose candidates were all deleted or disabled mid-load.
+  Future<bool> saveSourceCandidateCache(
+    SourceCandidateCache cache, {
+    bool replaceFreshExisting = true,
+    bool requireInstalledCandidateSources = false,
+    DateTime? now,
+  }) async {
+    final checkedAt = now ?? DateTime.now();
+    return database.transaction((transaction) async {
+      if (await _books.record(cache.bookId).get(transaction) == null) {
+        return false;
+      }
+      var snapshot = cache;
+      if (requireInstalledCandidateSources && cache.entries.isNotEmpty) {
+        final installed = <SourceCandidateCacheEntry>[];
+        for (final entry in cache.entries) {
+          final sourceId = entry.candidate.sourceId;
+          if (sourceId == null) continue;
+          final storedSource = await _sources.record(sourceId).get(transaction);
+          if (storedSource != null && storedSource['enabled'] != false) {
+            installed.add(entry);
+          }
+        }
+        // If an in-flight refresh now contains only sources that were deleted
+        // or disabled, do not resurrect a fresh authoritative empty snapshot.
+        // A delete that follows this transaction will prune it atomically too.
+        if (installed.isEmpty) return false;
+        if (installed.length != cache.entries.length) {
+          snapshot = cache.copyWith(entries: installed);
+        }
+      }
+      final key = SourceCandidateCache.recordKey(snapshot.bookId);
+      final stored = await _sourceSwitchCandidateCaches
+          .record(key)
+          .get(transaction);
+      if (stored != null) {
+        try {
+          final existing = SourceCandidateCache.fromJson(
+            Map<String, dynamic>.from(stored),
+          );
+          if (existing.isFreshAt(checkedAt)) {
+            if (!replaceFreshExisting) return false;
+            if (!existing.loadedAt.toUtc().isBefore(
+              snapshot.loadedAt.toUtc(),
+            )) {
+              return false;
+            }
+          }
+        } on FormatException {
+          // An unreadable leftover is replaced by the snapshot below.
+        } on TypeError {
+          // An unreadable leftover is replaced by the snapshot below.
+        }
+      }
+      await _sourceSwitchCandidateCaches
+          .record(key)
+          .put(transaction, snapshot.toJson());
+      return true;
+    });
+  }
 
   Future<List<ShelfGroup>> shelfGroups() async {
     final groups = [
@@ -388,6 +495,10 @@ class AppRepository {
         finder: Finder(filter: Filter.equals('bookId', id)),
       );
       await _textRules.record(id).delete(transaction);
+      await _sourceSwitchCandidateCaches.delete(
+        transaction,
+        finder: Finder(filter: Filter.equals('bookId', id)),
+      );
       for (final record in await _shelfGroups.find(transaction)) {
         final ids = (record.value['bookIds'] as List? ?? const [])
             .cast<String>();
@@ -457,12 +568,14 @@ class AppRepository {
   });
 
   /// Replaces one existing source binding and its note positions atomically.
-  /// Optional source/position expectations reject stale plans before writing.
+  /// Optional current/target-source and position expectations reject stale
+  /// plans before writing.
   /// Any failure rolls back both; note text edits and deletions are preserved.
   Future<void> replaceBookSource(
     Book book,
     Iterable<Bookmark> bookmarks, {
     String? expectedSourceId,
+    String? expectedTargetSourceId,
     ReadingPosition? expectedPosition,
   }) async {
     await database.transaction((transaction) async {
@@ -472,6 +585,17 @@ class AppRepository {
       if (expectedSourceId != null && current.sourceId != expectedSourceId) {
         throw StateError('书籍来源已变化，请重新选择书源。');
       }
+      if (expectedTargetSourceId != null) {
+        if (book.sourceId != expectedTargetSourceId) {
+          throw StateError('目标书源已变化，请重新选择书源。');
+        }
+        final target = await _sources
+            .record(expectedTargetSourceId)
+            .get(transaction);
+        if (target == null || target['enabled'] == false) {
+          throw StateError('目标书源已移除或停用，未执行换源。');
+        }
+      }
       if (expectedPosition != null &&
           (current.position.chapterIndex != expectedPosition.chapterIndex ||
               current.position.paragraphIndex !=
@@ -479,6 +603,10 @@ class AppRepository {
         throw StateError('阅读位置已变化，请重试换源。');
       }
       await _books.record(book.id).put(transaction, book.toJson());
+      // The candidate snapshot belongs to the book, not to the source that
+      // produced it: reopening 换源 after a successful switch must still show
+      // the list the user already loaded instead of scanning every source
+      // again. Only an explicit manual refresh replaces it.
       for (final bookmark in bookmarks) {
         if (bookmark.bookId != book.id) {
           throw ArgumentError.value(
@@ -1155,6 +1283,42 @@ class AppRepository {
     await database.transaction((transaction) async {
       await _sources.record(id).delete(transaction);
       await _sourceStates.record(id).delete(transaction);
+      for (final record in await _sourceSwitchCandidateCaches.find(
+        transaction,
+      )) {
+        SourceCandidateCache cache;
+        try {
+          cache = SourceCandidateCache.fromJson(
+            Map<String, dynamic>.from(record.value),
+          );
+        } on FormatException {
+          await _sourceSwitchCandidateCaches
+              .record(record.key)
+              .delete(transaction);
+          continue;
+        } on TypeError {
+          await _sourceSwitchCandidateCaches
+              .record(record.key)
+              .delete(transaction);
+          continue;
+        }
+        // The snapshot itself is book-scoped, so deleting the source that
+        // originally produced it must not discard candidates from sources that
+        // are still installed. Only its own entries are pruned below.
+        final retained = cache.entries
+            .where((entry) => entry.candidate.sourceId != id)
+            .toList();
+        if (retained.length == cache.entries.length) continue;
+        final target = _sourceSwitchCandidateCaches.record(record.key);
+        if (retained.isEmpty) {
+          await target.delete(transaction);
+        } else {
+          await target.put(
+            transaction,
+            cache.copyWith(entries: retained).toJson(),
+          );
+        }
+      }
     });
   }
 }

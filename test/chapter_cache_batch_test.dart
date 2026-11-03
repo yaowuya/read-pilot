@@ -16,7 +16,11 @@ class _BatchEngine extends SourceEngine {
   Completer<void>? started;
 
   @override
-  Future<Chapter> loadChapter(BookSource source, Chapter chapter) {
+  Future<Chapter> loadChapter(
+    BookSource source,
+    Chapter chapter, {
+    Future<void>? abortTrigger,
+  }) {
     requests.add(chapter.id);
     if (failures.contains(chapter.id)) {
       return Future.error(const SourceException('章节暂时不可用'));

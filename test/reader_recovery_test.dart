@@ -67,7 +67,11 @@ class _RetrySourceEngine extends SourceEngine {
   int requests = 0;
 
   @override
-  Future<Chapter> loadChapter(BookSource source, Chapter chapter) async {
+  Future<Chapter> loadChapter(
+    BookSource source,
+    Chapter chapter, {
+    Future<void>? abortTrigger,
+  }) async {
     if (requests++ == 0) throw const SourceException('临时网络错误');
     return chapter.withParagraphs(_paragraphs('Second chapter'));
   }
@@ -77,10 +81,18 @@ class _SwitchingSourceEngine extends _RetrySourceEngine {
   final oldChapter = Completer<Chapter>();
 
   @override
-  Future<Book> loadBook(BookSource source, Book result) async => result;
+  Future<Book> loadBook(
+    BookSource source,
+    Book result, {
+    Future<void>? abortTrigger,
+  }) async => result;
 
   @override
-  Future<Chapter> loadChapter(BookSource source, Chapter chapter) async {
+  Future<Chapter> loadChapter(
+    BookSource source,
+    Chapter chapter, {
+    Future<void>? abortTrigger,
+  }) async {
     if (source.id == 'https://books.example') return oldChapter.future;
     return chapter.withParagraphs(_paragraphs('New source'));
   }

@@ -215,8 +215,17 @@ class SourceEngine {
     }
   }
 
-  Future<Book> loadBook(BookSource source, Book result) async {
-    final info = await _loadBookInfo(source, result);
+  /// Loads a book's catalog, cancelling in-flight source transport when asked.
+  Future<Book> loadBook(
+    BookSource source,
+    Book result, {
+    Future<void>? abortTrigger,
+  }) async {
+    final info = await _loadBookInfo(
+      source,
+      result,
+      abortTrigger: abortTrigger,
+    );
     final tocRules = source.tocRules;
     _requireRules(tocRules, 'ruleToc', const [
       'chapterList',
@@ -235,13 +244,18 @@ class SourceEngine {
     final visitedTocPages = <String>{};
     var nextTocUri = tocUri;
     for (var page = 0; ; page++) {
+      await _throwIfCancelled(abortTrigger);
       if (!visitedTocPages.add(nextTocUri.toString())) break;
       if (page >= _maxTocPages) {
         throw const SourceException('目录分页超过 $_maxTocPages 页，已停止读取。');
       }
       final toc = nextTocUri == info.detail.url
           ? info.detail
-          : await _fetch(source, nextTocUri.toString());
+          : await _fetch(
+              source,
+              nextTocUri.toString(),
+              abortTrigger: abortTrigger,
+            );
       final tocRoot = _ruleRoot(toc.body, tocRules.values);
       for (final element in _interpreter.select(
         tocRoot,
@@ -284,10 +298,15 @@ class SourceEngine {
 
   Future<({Book book, _Page detail, RuleNode root})> _loadBookInfo(
     BookSource source,
-    Book result,
-  ) async {
+    Book result, {
+    Future<void>? abortTrigger,
+  }) async {
     if (result.url == null) throw const SourceException('这本书没有可用的详情地址。');
-    final detail = await _fetch(source, result.url!);
+    final detail = await _fetch(
+      source,
+      result.url!,
+      abortTrigger: abortTrigger,
+    );
     final rules = source.infoRules;
     final root = _ruleRoot(detail.body, rules.values);
     final title = _interpreter.extractFirst(root, rules['name']);
@@ -309,7 +328,12 @@ class SourceEngine {
     );
   }
 
-  Future<Chapter> loadChapter(BookSource source, Chapter chapter) async {
+  /// Loads chapter content, cancelling in-flight source transport when asked.
+  Future<Chapter> loadChapter(
+    BookSource source,
+    Chapter chapter, {
+    Future<void>? abortTrigger,
+  }) async {
     if (chapter.url == null) throw const SourceException('章节没有正文地址。');
     final rules = source.contentRules;
     final contentRule = _requiredRule(rules, 'ruleContent', 'content');
@@ -327,11 +351,16 @@ class SourceEngine {
     var resolvedTitle = '';
 
     for (var page = 0; ; page++) {
+      await _throwIfCancelled(abortTrigger);
       if (!visited.add(nextUrl)) break;
       if (page >= _maxContentPages) {
         throw const SourceException('正文分页超过 $_maxContentPages 页，已停止读取。');
       }
-      final response = await _fetch(source, nextUrl);
+      final response = await _fetch(
+        source,
+        nextUrl,
+        abortTrigger: abortTrigger,
+      );
       final root = _ruleRoot(response.body, rules.values);
       final extracted = await _extractRule(root, contentRule, source: source);
       paragraphs.addAll(

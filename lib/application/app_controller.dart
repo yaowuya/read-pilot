@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../data/app_repository.dart';
@@ -12,6 +14,7 @@ import '../domain/shelf_group.dart';
 import '../domain/source_import.dart';
 import '../domain/source_health.dart';
 import '../domain/source_switch.dart';
+import '../domain/source_switch_candidate.dart';
 import '../services/book_text_rules.dart';
 import '../services/epub_importer.dart';
 import '../services/local_backup.dart';
@@ -37,6 +40,11 @@ class AppController extends ChangeNotifier {
   final SourceEngine engine;
   final SourceImportService sourceImportService;
   final SourceSearchScheduler _sourceSearchScheduler;
+  static const _sourceCandidateMetadataConcurrency = 3;
+  // Backpressure keeps a noisy search result from queuing an unbounded number
+  // of full catalog/content loads while preserving early ready candidates.
+  static const _sourceCandidateMetadataBacklogLimit =
+      _sourceCandidateMetadataConcurrency * 4;
   List<Book> _books = [];
   List<ShelfGroup> _shelfGroups = [];
   List<Book> _catalog = [];
@@ -746,61 +754,427 @@ class AppController extends ChangeNotifier {
     _notify();
   }
 
+  /// 搜索全部启用书源。
+  ///
+  /// [onProgress] 每完成一个书源回调一次，用于展示查询进度；[onResult] 同时
+  /// 带回该批结果，让界面可以边搜索边显示，而不是等全部书源结束。异步的
+  /// [onResult] 会被等待，以便受限的下游队列能够向书源搜索施加背压。
   Future<List<SourceSearchGroup>> searchSources(
     String keyword, {
     int page = 1,
     Future<void>? abortTrigger,
+    void Function(int processed, int total)? onProgress,
+    FutureOr<void> Function(SourceSearchGroup group, int processed, int total)?
+    onResult,
   }) => _sourceSearchScheduler.run(
     _sources.where((source) => source.enabled),
     (source) =>
         _search(source, keyword, page: page, abortTrigger: abortTrigger),
     abortTrigger: abortTrigger,
+    onResult: onProgress == null && onResult == null
+        ? null
+        : (group, processed, total) async {
+            await onResult?.call(group, processed, total);
+            onProgress?.call(processed, total);
+          },
   );
 
   /// Finds same-title results while keeping source order and author preference.
   Future<SourceCandidateSearchResult> findSourceCandidates(
     String bookId, {
     Future<void>? abortTrigger,
-  }) async {
+  }) {
     final current = book(bookId);
-    if (current == null || !current.isRemote) {
+    if (current == null) {
+      return Future.value(SourceCandidateSearchResult(const []));
+    }
+    return findSourceCandidatesFor(current, abortTrigger: abortTrigger);
+  }
+
+  /// Returns the still-valid source candidates loaded for this shelf book.
+  ///
+  /// The snapshot is book-scoped: it survives a completed source switch, a
+  /// moved reading position and a different target chapter, so reopening 换源
+  /// shows the list the user already loaded instead of scanning every source
+  /// again. Only the manual refresh control replaces it.
+  ///
+  /// Only shelf books use this persistence: a discovery/search result has no
+  /// stable local identity to clean up when it disappears.
+  Future<SourceCandidateSearchResult?> sourceCandidateCacheFor(
+    Book current,
+  ) async {
+    if (current.sourceId == null || book(current.id) == null) return null;
+    final cache = await repository.sourceCandidateCache(current.id);
+    if (cache == null) return null;
+    final enabledSourceIds = {
+      for (final source in _sources)
+        if (source.enabled) source.id,
+    };
+    final entries = cache.entries
+        .where(
+          (entry) =>
+              entry.candidate.sourceId != current.sourceId &&
+              entry.candidate.sourceId != null &&
+              enabledSourceIds.contains(entry.candidate.sourceId) &&
+              (entry.info?.isReadyForDisplay ?? false),
+        )
+        .toList();
+    // A cached list is always authoritative for this opening, including when
+    // every candidate is now the current source or has been removed. Requiring
+    // a nonempty list here is what made the sheet rescan all sources again.
+    return SourceCandidateSearchResult(
+      entries.map((entry) => entry.candidate),
+      failedSources: cache.failedSources,
+      candidateInfoById: {
+        for (final entry in entries)
+          if (entry.info != null) entry.candidate.id: entry.info!,
+      },
+      fromCache: true,
+      loadedAt: cache.loadedAt,
+    );
+  }
+
+  /// Searches again and stores the result as this book's snapshot.
+  ///
+  /// A complete result always replaces the previous snapshot. An incomplete one
+  /// (some enabled source failed) only seeds a book that has no snapshot yet, so
+  /// a partially failing refresh keeps what the user already loaded without
+  /// making the next opening scan every source again.
+  Future<SourceCandidateSearchResult> reloadSourceCandidatesFor(
+    Book current, {
+    Future<void>? abortTrigger,
+    void Function(
+      SourceCandidateSearchResult partial,
+      int processed,
+      int total,
+    )?
+    onUpdate,
+  }) async {
+    // Cache ordering is based on request start, not completion: a slow refresh
+    // that finishes after a newer manual refresh must not overwrite it.
+    final startedAt = DateTime.now().toUtc();
+    var aborted = false;
+    abortTrigger?.then((_) => aborted = true, onError: (_) => aborted = true);
+    final result = await findSourceCandidatesFor(
+      current,
+      abortTrigger: abortTrigger,
+      onUpdate: onUpdate,
+    );
+    final target = _sourceCandidateTarget(current);
+    final sourceId = current.sourceId;
+    if (!aborted && target != null && sourceId != null) {
+      await repository.saveSourceCandidateCache(
+        SourceCandidateCache(
+          bookId: current.id,
+          originSourceId: sourceId,
+          targetChapterIndex: target.index,
+          targetChapterId: target.id,
+          targetChapterTitle: target.title,
+          loadedAt: startedAt,
+          failedSources: result.failedSources,
+          entries: [
+            for (final candidate in result.candidates)
+              SourceCandidateCacheEntry(
+                candidate: candidate,
+                info: result.infoFor(candidate),
+              ),
+          ],
+        ),
+        replaceFreshExisting: result.hasCompleteCandidateResults,
+        requireInstalledCandidateSources: true,
+      );
+    }
+    return result;
+  }
+
+  /// Same search as [findSourceCandidates], for books that are not on the shelf.
+  ///
+  /// 搜索结果里的书还没加入书架也能换源，此时只有内存中的这本对象，所以直接
+  /// 用传入的书籍定位同名候选。
+  ///
+  /// [onUpdate] emits a candidate only after its mapped chapter and word count
+  /// are ready. Source discovery and metadata loading run together, so a usable
+  /// row can appear before a long all-source search finishes.
+  Future<SourceCandidateSearchResult> findSourceCandidatesFor(
+    Book current, {
+    Future<void>? abortTrigger,
+    void Function(
+      SourceCandidateSearchResult partial,
+      int processed,
+      int total,
+    )?
+    onUpdate,
+  }) async {
+    if (!current.isRemote) {
       return SourceCandidateSearchResult(const []);
     }
+    var aborted = false;
     final titleKey = _matchKey(current.title);
     final authorKey = _matchKey(current.author);
-    final ranked = <({Book book, bool authorMatch, int order})>[];
+    final sourceOrderById = {
+      for (final entry in _sources.where((source) => source.enabled).indexed)
+        entry.$2.id: entry.$1,
+    };
     final seen = <String>{};
-    var order = 0;
+    final ready =
+        <
+          String,
+          ({Book book, bool authorMatch, int sourceOrder, int candidateOrder})
+        >{};
+    final infoById = <String, SourceCandidateInfo>{};
+    final metadataQueue =
+        <
+          ({Book book, bool authorMatch, int sourceOrder, int candidateOrder})
+        >[];
+    var nextMetadata = 0;
+    var activeMetadataLoads = 0;
+    var availableMetadataSlots = _sourceCandidateMetadataBacklogLimit;
+    final metadataSlotWaiters = <Completer<bool>>[];
+    var searchFinished = false;
+    final metadataDrained = Completer<void>();
     var failedSources = 0;
-    for (final group in await searchSources(
-      current.title,
-      abortTrigger: abortTrigger,
-    )) {
-      if (group.error != null) failedSources++;
-      if (group.source.id == current.sourceId) continue;
-      for (final candidate in group.books) {
-        final candidateOrder = order++;
-        if (!seen.add(candidate.id) || _matchKey(candidate.title) != titleKey) {
-          continue;
-        }
-        ranked.add((
-          book: candidate,
-          authorMatch:
-              authorKey.isNotEmpty && _matchKey(candidate.author) == authorKey,
-          order: candidateOrder,
-        ));
+    final unavailableCandidateSourceIds = <String>{};
+    var lastProcessed = 0;
+    var lastTotal = 0;
+
+    bool isEnabledAlternativeSource(String? sourceId) =>
+        sourceId != null &&
+        sourceId != current.sourceId &&
+        _sources.any((source) => source.id == sourceId && source.enabled);
+
+    void markUnavailableCandidateSource(String? sourceId) {
+      if (!isEnabledAlternativeSource(sourceId)) return;
+      if (unavailableCandidateSourceIds.add(sourceId!)) failedSources++;
+    }
+
+    Future<bool> acquireMetadataSlot() {
+      if (aborted) return Future.value(false);
+      if (availableMetadataSlots > 0) {
+        availableMetadataSlots--;
+        return Future.value(true);
+      }
+      final waiter = Completer<bool>();
+      metadataSlotWaiters.add(waiter);
+      return waiter.future;
+    }
+
+    void releaseMetadataSlot() {
+      if (metadataSlotWaiters.isNotEmpty) {
+        metadataSlotWaiters.removeAt(0).complete(!aborted);
+      } else if (!aborted) {
+        availableMetadataSlots++;
       }
     }
-    ranked.sort((left, right) {
-      final author = (right.authorMatch ? 1 : 0).compareTo(
-        left.authorMatch ? 1 : 0,
+
+    late void Function() finishMetadataIfDrained;
+
+    void cancelMetadataWaiters() {
+      if (aborted) return;
+      aborted = true;
+      for (final waiter in metadataSlotWaiters) {
+        if (!waiter.isCompleted) waiter.complete(false);
+      }
+      metadataSlotWaiters.clear();
+      finishMetadataIfDrained();
+    }
+
+    SourceCandidateSearchResult snapshot() {
+      final sorted = ready.values.toList()..sort(_compareCandidates);
+      return SourceCandidateSearchResult(
+        sorted.map((item) => item.book),
+        failedSources: failedSources,
+        unavailableCandidateSourceIds: unavailableCandidateSourceIds,
+        candidateInfoById: infoById,
+        pendingMetadata:
+            activeMetadataLoads + metadataQueue.length - nextMetadata,
       );
-      return author != 0 ? author : left.order.compareTo(right.order);
-    });
-    return SourceCandidateSearchResult(
-      ranked.map((item) => item.book),
-      failedSources: failedSources,
+    }
+
+    void report() {
+      if (aborted) return;
+      onUpdate?.call(snapshot(), lastProcessed, lastTotal);
+    }
+
+    finishMetadataIfDrained = () {
+      if (!metadataDrained.isCompleted &&
+          (aborted ||
+              (searchFinished &&
+                  activeMetadataLoads == 0 &&
+                  nextMetadata == metadataQueue.length))) {
+        metadataDrained.complete();
+      }
+    };
+    abortTrigger?.then(
+      (_) => cancelMetadataWaiters(),
+      onError: (_) => cancelMetadataWaiters(),
     );
+
+    late void Function() scheduleMetadataLoads;
+
+    Future<void> loadNextMetadata() async {
+      if (aborted || nextMetadata >= metadataQueue.length) {
+        finishMetadataIfDrained();
+        return;
+      }
+      final item = metadataQueue[nextMetadata++];
+      activeMetadataLoads++;
+      try {
+        final info = await _loadReadySourceCandidateInfo(
+          current,
+          item.book,
+          abortTrigger: abortTrigger,
+        );
+        if (!aborted && isEnabledAlternativeSource(item.book.sourceId)) {
+          if (info != null) {
+            ready[item.book.id] = item;
+            infoById[item.book.id] = info;
+          } else {
+            // A failed catalog/map/content read means this source did not
+            // produce a complete candidate list. Keep an existing cache rather
+            // than replacing it with a transiently truncated result.
+            markUnavailableCandidateSource(item.book.sourceId);
+          }
+          report();
+        }
+      } finally {
+        activeMetadataLoads--;
+        releaseMetadataSlot();
+        if (!aborted) scheduleMetadataLoads();
+        finishMetadataIfDrained();
+      }
+    }
+
+    scheduleMetadataLoads = () {
+      while (!aborted &&
+          activeMetadataLoads < _sourceCandidateMetadataConcurrency &&
+          nextMetadata < metadataQueue.length) {
+        unawaited(loadNextMetadata());
+      }
+      finishMetadataIfDrained();
+    };
+
+    await searchSources(
+      current.title,
+      abortTrigger: abortTrigger,
+      onResult: (group, processed, total) async {
+        lastProcessed = processed;
+        lastTotal = total;
+        if (group.error != null) {
+          if (_sources.any(
+            (source) => source.id == group.source.id && source.enabled,
+          )) {
+            failedSources++;
+            if (group.source.id != current.sourceId) {
+              unavailableCandidateSourceIds.add(group.source.id);
+            }
+          }
+        }
+        if (isEnabledAlternativeSource(group.source.id)) {
+          final sourceOrder =
+              sourceOrderById[group.source.id] ?? sourceOrderById.length;
+          var candidateOrder = 0;
+          for (final candidate in group.books) {
+            final resultOrder = candidateOrder++;
+            if (!seen.add(candidate.id) ||
+                _matchKey(candidate.title) != titleKey ||
+                !isEnabledAlternativeSource(candidate.sourceId)) {
+              continue;
+            }
+            final acquired = await acquireMetadataSlot();
+            if (!acquired) return;
+            if (aborted || !isEnabledAlternativeSource(candidate.sourceId)) {
+              releaseMetadataSlot();
+              return;
+            }
+            metadataQueue.add((
+              book: candidate,
+              authorMatch:
+                  authorKey.isNotEmpty &&
+                  _matchKey(candidate.author) == authorKey,
+              sourceOrder: sourceOrder,
+              candidateOrder: resultOrder,
+            ));
+            scheduleMetadataLoads();
+          }
+        }
+        report();
+      },
+    );
+    searchFinished = true;
+    finishMetadataIfDrained();
+    await metadataDrained.future;
+    return snapshot();
+  }
+
+  Future<SourceCandidateInfo?> _loadReadySourceCandidateInfo(
+    Book current,
+    Book candidate, {
+    Future<void>? abortTrigger,
+  }) async {
+    var aborted = false;
+    abortTrigger?.then((_) => aborted = true, onError: (_) => aborted = true);
+    try {
+      final sourceId = candidate.sourceId;
+      if (sourceId == null) return null;
+      final source = _source(sourceId);
+      final loaded = await engine.loadBook(
+        source,
+        candidate,
+        abortTrigger: abortTrigger,
+      );
+      if (aborted) return null;
+      final plan = const SourceSwitchMapper().plan(
+        current: current,
+        replacement: loaded,
+        bookmarks: const [],
+      );
+      final mappedIndex = plan.book.position.chapterIndex;
+      if (mappedIndex < 0 || mappedIndex >= loaded.chapters.length) return null;
+      final mappedChapter = loaded.chapters[mappedIndex];
+      final chapter = await engine.loadChapter(
+        source,
+        mappedChapter,
+        abortTrigger: abortTrigger,
+      );
+      if (aborted) return null;
+      final info = SourceCandidateInfo(
+        chapterCount: loaded.chapters.length,
+        mappedChapterIndex: mappedIndex,
+        mappedChapterTitle: mappedChapter.title,
+        wordCount: _chapterWordCount(chapter),
+      );
+      return info.isReadyForDisplay ? info : null;
+    } catch (_) {
+      // A source that cannot supply the mapped chapter or content is not a
+      // usable switch target, so it is deliberately omitted from the list.
+      return null;
+    }
+  }
+
+  ({int index, String id, String title})? _sourceCandidateTarget(Book current) {
+    if (current.chapters.isEmpty) return null;
+    final index = current.position.chapterIndex
+        .clamp(0, current.chapters.length - 1)
+        .toInt();
+    final chapter = current.chapters[index];
+    return (index: index, id: chapter.id, title: chapter.title);
+  }
+
+  static int _chapterWordCount(Chapter chapter) =>
+      chapter.paragraphs.join().replaceAll(RegExp(r'\s+'), '').runes.length;
+
+  static int _compareCandidates(
+    ({Book book, bool authorMatch, int sourceOrder, int candidateOrder}) left,
+    ({Book book, bool authorMatch, int sourceOrder, int candidateOrder}) right,
+  ) {
+    final author = (right.authorMatch ? 1 : 0).compareTo(
+      left.authorMatch ? 1 : 0,
+    );
+    if (author != 0) return author;
+    final source = left.sourceOrder.compareTo(right.sourceOrder);
+    if (source != 0) return source;
+    final candidate = left.candidateOrder.compareTo(right.candidateOrder);
+    return candidate != 0 ? candidate : left.book.id.compareTo(right.book.id);
   }
 
   /// Rebinds one shelf book only after target content and persistence succeed.
@@ -851,6 +1225,7 @@ class AppController extends ChangeNotifier {
       plan.book,
       plan.bookmarks,
       expectedSourceId: latest.sourceId,
+      expectedTargetSourceId: candidate.sourceId,
       expectedPosition: latest.position,
     );
 
@@ -1098,10 +1473,42 @@ class SourceCandidateSearchResult {
   SourceCandidateSearchResult(
     Iterable<Book> candidates, {
     this.failedSources = 0,
-  }) : candidates = List.unmodifiable(candidates);
+    Iterable<String> unavailableCandidateSourceIds = const [],
+    Map<String, SourceCandidateInfo> candidateInfoById = const {},
+    this.pendingMetadata = 0,
+    this.fromCache = false,
+    this.loadedAt,
+  }) : candidates = List.unmodifiable(candidates),
+       unavailableCandidateSourceIds = Set.unmodifiable(
+         unavailableCandidateSourceIds,
+       ),
+       candidateInfoById = Map.unmodifiable(candidateInfoById);
 
   final List<Book> candidates;
   final int failedSources;
+
+  /// Enabled alternative sources that did not finish this search. A result with
+  /// any of these missing must not replace a complete persisted snapshot.
+  final Set<String> unavailableCandidateSourceIds;
+
+  bool get hasCompleteCandidateResults => unavailableCandidateSourceIds.isEmpty;
+
+  /// Metadata is kept separate from [Book] so a search candidate never leaks
+  /// source-switch-only state into shelf data or normal discovery results.
+  final Map<String, SourceCandidateInfo> candidateInfoById;
+
+  /// Candidate metadata still in the bounded load queue for a live search.
+  /// Cached and final results always report zero.
+  final int pendingMetadata;
+
+  /// True when this is the last successful source search restored from disk.
+  final bool fromCache;
+
+  /// The UTC time that a cached snapshot was last fully loaded.
+  final DateTime? loadedAt;
+
+  SourceCandidateInfo? infoFor(Book candidate) =>
+      candidateInfoById[candidate.id];
 }
 
 class SourceSearchGroup {

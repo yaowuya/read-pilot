@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book.dart';
+import '../../domain/source_switch_candidate.dart';
 import '../theme.dart';
 import 'book_cover.dart';
 import 'common.dart';
@@ -32,12 +33,16 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
   String? _error;
   String? _switchingId;
   bool _loading = true;
+  bool _manualReload = false;
   bool _sortBySource = false;
+  int _processed = 0;
+  int _total = 0;
+  int _pendingMetadata = 0;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_load());
+    unawaited(_restoreOrLoad());
   }
 
   @override
@@ -47,24 +52,65 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _restoreOrLoad() async {
+    try {
+      final cached = await widget.controller.sourceCandidateCacheFor(
+        widget.book,
+      );
+      if (!mounted) return;
+      if (cached != null) {
+        setState(() {
+          _result = cached;
+          _loading = false;
+          _processed = 0;
+          _total = 0;
+          _pendingMetadata = 0;
+        });
+        return;
+      }
+    } catch (_) {
+      // A corrupted or unavailable cache must not prevent a live source search.
+    }
+    if (mounted) await _reload();
+  }
+
+  /// Start a fresh search. Manual refreshes intentionally clear the displayed
+  /// snapshot first: every row that returns afterwards belongs to this run.
+  Future<void> _reload({bool manual = false}) async {
     if (!(_abort?.isCompleted ?? true)) _abort!.complete();
     final abort = Completer<void>();
     setState(() {
       _abort = abort;
       _loading = true;
-      _error = null;
+      _manualReload = manual;
       _result = null;
+      _error = null;
+      _processed = 0;
+      _total = 0;
+      _pendingMetadata = 0;
     });
     try {
-      final result = await widget.controller.findSourceCandidates(
-        widget.book.id,
+      final result = await widget.controller.reloadSourceCandidatesFor(
+        widget.book,
         abortTrigger: abort.future,
+        // 上千个书源要搜几分钟：每完成一个就把已找到的候选画出来。
+        // 手动刷新已清空旧卡片，下面出现的都是本轮新结果。
+        onUpdate: (partial, processed, total) {
+          if (!mounted || _abort != abort) return;
+          setState(() {
+            _result = partial;
+            _processed = processed;
+            _total = total;
+            _pendingMetadata = partial.pendingMetadata;
+          });
+        },
       );
       if (!mounted || _abort != abort) return;
       setState(() {
         _result = result;
         _loading = false;
+        _manualReload = false;
+        _pendingMetadata = 0;
         _abort = null;
       });
     } catch (error) {
@@ -72,6 +118,8 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
       setState(() {
         _error = errorMessage(error);
         _loading = false;
+        _manualReload = false;
+        _pendingMetadata = 0;
         _abort = null;
       });
     }
@@ -100,11 +148,13 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
 
   List<Book> get _visibleCandidates {
     final query = _filter.text.trim().toLowerCase();
-    final ranked = (_result?.candidates ?? const <Book>[]).indexed
+    final result = _result;
+    final ranked = (result?.candidates ?? const <Book>[]).indexed
         .where(
           (entry) =>
-              entry.$2.sourceLabel.toLowerCase().contains(query) ||
-              entry.$2.author.toLowerCase().contains(query),
+              (result?.infoFor(entry.$2)?.isReadyForDisplay ?? false) &&
+              (entry.$2.sourceLabel.toLowerCase().contains(query) ||
+                  entry.$2.author.toLowerCase().contains(query)),
         )
         .toList();
     if (_sortBySource) {
@@ -116,6 +166,43 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
       });
     }
     return ranked.map((entry) => entry.$2).toList();
+  }
+
+  String get _currentChapterDescription {
+    final chapters = widget.book.chapters;
+    if (chapters.isEmpty) return '当前章节：目录尚未加载';
+    final index = widget.book.position.chapterIndex
+        .clamp(0, chapters.length - 1)
+        .toInt();
+    final title = chapters[index].title.trim();
+    return title.isEmpty
+        ? '当前章节：第 ${index + 1} 章'
+        : '当前章节：第 ${index + 1} 章 · $title';
+  }
+
+  String _statusText(
+    SourceCandidateSearchResult? result,
+    List<Book> candidates,
+    int sourceCount,
+    bool filtering,
+  ) {
+    if (_loading) {
+      final metadataPending =
+          _pendingMetadata > 0 && _total > 0 && _processed >= _total;
+      if (metadataPending) {
+        return _manualReload
+            ? '正在加载本次刷新候选的章节与字数…（剩余 $_pendingMetadata）'
+            : '正在加载候选章节与字数…（剩余 $_pendingMetadata）';
+      }
+      if (_manualReload) {
+        return _total > 0 ? '正在重新加载书源…（$_processed/$_total）' : '正在重新加载书源…';
+      }
+      return _total > 0 ? '正在查找其他同名书源…（$_processed/$_total）' : '正在查找其他同名书源…';
+    }
+    if (result == null) return '候选搜索未完成';
+    return filtering
+        ? '匹配 ${candidates.length} / ${result.candidates.length} · $sourceCount 个书源'
+        : '候选 ${candidates.length} · $sourceCount 个书源';
   }
 
   @override
@@ -139,44 +226,42 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Semantics(
+                          header: true,
+                          child: Text(
+                            '换源',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '刷新候选',
+                        onPressed: !_loading && _switchingId == null
+                            ? () => _reload(manual: true)
+                            : null,
+                        icon: const Icon(Icons.refresh),
+                      ),
+                      IconButton(
+                        tooltip: '关闭',
+                        onPressed: _switchingId == null
+                            ? () => Navigator.pop(context)
+                            : null,
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                ),
                 Flexible(
                   fit: FlexFit.loose,
                   child: SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Semantics(
-                                  header: true,
-                                  child: Text(
-                                    '换源',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleLarge,
-                                  ),
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: '刷新候选',
-                                onPressed: !_loading && _switchingId == null
-                                    ? _load
-                                    : null,
-                                icon: const Icon(Icons.refresh),
-                              ),
-                              IconButton(
-                                tooltip: '关闭',
-                                onPressed: _switchingId == null
-                                    ? () => Navigator.pop(context)
-                                    : null,
-                                icon: const Icon(Icons.close),
-                              ),
-                            ],
-                          ),
-                        ),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 20),
                           child: Column(
@@ -198,6 +283,46 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                                   color: AppColors.muted,
                                 ),
                               ),
+                              const SizedBox(height: 3),
+                              Text(
+                                _currentChapterDescription,
+                                key: const Key('source-switch-current-chapter'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.muted,
+                                ),
+                              ),
+                              if (result?.fromCache ?? false) ...[
+                                const SizedBox(height: 10),
+                                QuietPanel(
+                                  key: const Key('source-switch-cache-status'),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 8,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.history,
+                                        size: 16,
+                                        color: AppColors.muted,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          '已恢复上次加载的书源，10 天内可直接选择。',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.muted,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 16),
                               TextField(
                                 key: const Key('source-switch-filter'),
@@ -225,69 +350,68 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                                 ),
                               ),
                               const SizedBox(height: 12),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Semantics(
-                                      liveRegion: true,
-                                      child: Text(
-                                        _loading
-                                            ? '正在查找其他同名书源…'
-                                            : result == null
-                                            ? '候选搜索未完成'
-                                            : filtering
-                                            ? '匹配 ${candidates.length} / '
-                                                  '${result.candidates.length} · '
-                                                  '$sourceCount 个书源'
-                                            : '候选 ${candidates.length} · '
-                                                  '$sourceCount 个书源',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: AppColors.muted,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  PopupMenuButton<bool>(
-                                    key: const Key('source-switch-sort'),
-                                    tooltip: '排序',
-                                    enabled: !_loading && _switchingId == null,
-                                    onSelected: (value) =>
-                                        setState(() => _sortBySource = value),
-                                    itemBuilder: (_) => [
-                                      CheckedPopupMenuItem(
-                                        value: false,
-                                        checked: !_sortBySource,
-                                        child: const Text('相关度'),
-                                      ),
-                                      CheckedPopupMenuItem(
-                                        value: true,
-                                        checked: _sortBySource,
-                                        child: const Text('书源名称'),
-                                      ),
-                                    ],
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 12,
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(Icons.sort, size: 18),
-                                          const SizedBox(width: 6),
-                                          Text(_sortBySource ? '书源名称' : '相关度'),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
                             ],
                           ),
                         ),
                       ],
                     ),
+                  ),
+                ),
+                Padding(
+                  key: const Key('source-switch-status'),
+                  padding: const EdgeInsets.fromLTRB(20, 0, 16, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Semantics(
+                          liveRegion: true,
+                          child: Text(
+                            _statusText(
+                              result,
+                              candidates,
+                              sourceCount,
+                              filtering,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                        ),
+                      ),
+                      PopupMenuButton<bool>(
+                        key: const Key('source-switch-sort'),
+                        tooltip: '排序',
+                        enabled: !_loading && _switchingId == null,
+                        onSelected: (value) =>
+                            setState(() => _sortBySource = value),
+                        itemBuilder: (_) => [
+                          CheckedPopupMenuItem(
+                            value: false,
+                            checked: !_sortBySource,
+                            child: const Text('相关度'),
+                          ),
+                          CheckedPopupMenuItem(
+                            value: true,
+                            checked: _sortBySource,
+                            child: const Text('书源名称'),
+                          ),
+                        ],
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.sort, size: 18),
+                              const SizedBox(width: 6),
+                              Text(_sortBySource ? '书源名称' : '相关度'),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 if (_error != null)
@@ -310,7 +434,9 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                             ),
                           ),
                           TextButton.icon(
-                            onPressed: _switchingId == null ? _load : null,
+                            onPressed: _switchingId == null
+                                ? () => _reload(manual: true)
+                                : null,
                             icon: const Icon(Icons.refresh, size: 18),
                             label: const Text('重试'),
                           ),
@@ -319,7 +445,9 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                     ),
                   ),
                 Expanded(
-                  child: _loading
+                  // 已经有候选在列就不压转圈：下面的列表会随着书源返回继续增长，
+                  // 上方的进度文字负责表达还在搜索。
+                  child: _loading && candidates.isEmpty
                       ? const Center(
                           key: Key('source-switch-loading'),
                           child: CircularProgressIndicator(),
@@ -394,8 +522,27 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
     setState(() {});
   }
 
+  String _candidateChapterDescription(SourceCandidateInfo? info) {
+    final mappedIndex = info?.mappedChapterIndex;
+    if (mappedIndex == null) {
+      return info?.errorMessage == null ? '章节：正在加载信息…' : '章节：暂未获取';
+    }
+    final chapterLabel = info?.chapterCount == null
+        ? '第 ${mappedIndex + 1} 章'
+        : '第 ${mappedIndex + 1}/${info!.chapterCount} 章';
+    final title = info?.mappedChapterTitle?.trim() ?? '';
+    return title.isEmpty ? '章节：$chapterLabel' : '章节：$chapterLabel · $title';
+  }
+
+  String _candidateWordCountDescription(SourceCandidateInfo? info) {
+    final wordCount = info?.wordCount;
+    if (wordCount != null) return '字数：$wordCount';
+    return info?.errorMessage == null ? '字数：正在加载…' : '字数：暂未获取';
+  }
+
   Widget _candidateRow(Book candidate) {
     final switching = _switchingId == candidate.id;
+    final info = _result?.infoFor(candidate);
     return Material(
       color: _surface,
       borderRadius: BorderRadius.circular(16),
@@ -433,6 +580,27 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                     ),
                     Text(
                       '作者：${candidate.author}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _candidateChapterDescription(info),
+                      key: Key('source-candidate-chapter-${candidate.id}'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                    Text(
+                      _candidateWordCountDescription(info),
+                      key: Key('source-candidate-word-count-${candidate.id}'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(

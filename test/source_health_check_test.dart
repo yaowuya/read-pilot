@@ -52,7 +52,11 @@ class _HealthSourceEngine extends SourceEngine {
   }
 
   @override
-  Future<Book> loadBook(BookSource source, Book result) async {
+  Future<Book> loadBook(
+    BookSource source,
+    Book result, {
+    Future<void>? abortTrigger,
+  }) async {
     calls.add('catalog');
     return result.copyWith(
       chapters: [
@@ -66,7 +70,11 @@ class _HealthSourceEngine extends SourceEngine {
   }
 
   @override
-  Future<Chapter> loadChapter(BookSource source, Chapter chapter) async {
+  Future<Chapter> loadChapter(
+    BookSource source,
+    Chapter chapter, {
+    Future<void>? abortTrigger,
+  }) async {
     calls.add('content');
     return chapter.withParagraphs(const ['检查正文。']);
   }

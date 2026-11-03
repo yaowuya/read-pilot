@@ -11,6 +11,7 @@ import 'package:read_pilot/domain/book.dart';
 import 'package:read_pilot/domain/book_source.dart';
 import 'package:read_pilot/domain/reader_settings.dart';
 import 'package:read_pilot/domain/source_import.dart';
+import 'package:read_pilot/domain/source_switch_candidate.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/services/source_import_service.dart';
 import 'package:sembast/sembast_memory.dart';
@@ -43,9 +44,16 @@ class _SwitchSourceEngine extends SourceEngine {
   Book? refreshedBook;
   Uint8List coverBytes = Uint8List.fromList(const [1, 2, 3]);
   Object? failure;
+  final searchFailures = <String, Object>{};
+  String? delayedSearchSourceId;
+  Completer<List<Book>>? delayedSearch;
+  String? completedSearchSourceId;
+  Completer<void>? searchCompleted;
   String? delayedSourceId;
   Completer<Chapter>? delayedChapter;
   Completer<void>? chapterStarted;
+  Future<void>? loadBookAbortTrigger;
+  Future<void>? loadChapterAbortTrigger;
   final chapterRequests = <String>[];
 
   @override
@@ -54,16 +62,39 @@ class _SwitchSourceEngine extends SourceEngine {
     String keyword, {
     int page = 1,
     Future<void>? abortTrigger,
-  }) async => results[source.id] ?? const [];
+  }) async {
+    final failure = searchFailures[source.id];
+    if (failure != null) throw failure;
+    if (source.id == delayedSearchSourceId && delayedSearch != null) {
+      return delayedSearch!.future;
+    }
+    final completed = searchCompleted;
+    if (source.id == completedSearchSourceId &&
+        completed != null &&
+        !completed.isCompleted) {
+      completed.complete();
+    }
+    return results[source.id] ?? const [];
+  }
 
   @override
-  Future<Book> loadBook(BookSource source, Book result) async {
+  Future<Book> loadBook(
+    BookSource source,
+    Book result, {
+    Future<void>? abortTrigger,
+  }) async {
+    loadBookAbortTrigger = abortTrigger;
     if (failure != null) throw failure!;
     return loadedBook ?? result;
   }
 
   @override
-  Future<Chapter> loadChapter(BookSource source, Chapter chapter) async {
+  Future<Chapter> loadChapter(
+    BookSource source,
+    Chapter chapter, {
+    Future<void>? abortTrigger,
+  }) async {
+    loadChapterAbortTrigger = abortTrigger;
     chapterRequests.add(chapter.id);
     if (chapterStarted case final started? when !started.isCompleted) {
       started.complete();
@@ -87,6 +118,54 @@ class _SwitchSourceEngine extends SourceEngine {
     if (failure != null) throw failure!;
     return coverBytes;
   }
+}
+
+class _BoundedMetadataSourceEngine extends SourceEngine {
+  _BoundedMetadataSourceEngine(this.metadataGate);
+
+  final Future<void> metadataGate;
+  final metadataStarted = Completer<void>();
+  var searchStarted = 0;
+  var metadataLoads = 0;
+
+  @override
+  Future<List<Book>> search(
+    BookSource source,
+    String keyword, {
+    int page = 1,
+    Future<void>? abortTrigger,
+  }) async {
+    searchStarted++;
+    if (source.id == 'https://source-0.example') return const [];
+    return [
+      _remoteBook(
+        id: 'backlog-${source.id}',
+        sourceId: source.id,
+        sourceLabel: source.id,
+      ),
+    ];
+  }
+
+  @override
+  Future<Book> loadBook(
+    BookSource source,
+    Book result, {
+    Future<void>? abortTrigger,
+  }) async {
+    metadataLoads++;
+    if (metadataLoads == 3 && !metadataStarted.isCompleted) {
+      metadataStarted.complete();
+    }
+    await metadataGate;
+    return result;
+  }
+
+  @override
+  Future<Chapter> loadChapter(
+    BookSource source,
+    Chapter chapter, {
+    Future<void>? abortTrigger,
+  }) async => chapter.withParagraphs(const ['候选正文']);
 }
 
 class _PausedProgressRepository extends AppRepository {
@@ -159,6 +238,7 @@ class _FailingSwitchRepository extends AppRepository {
     Book book,
     Iterable<Bookmark> bookmarks, {
     String? expectedSourceId,
+    String? expectedTargetSourceId,
     ReadingPosition? expectedPosition,
   }) async => throw StateError('persist failed');
 }
@@ -467,6 +547,718 @@ void main() {
   );
 
   test(
+    'streams a candidate only after its chapter and word count are ready',
+    () async {
+      controller.dispose();
+      final engine = _SwitchSourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+      );
+      const currentSource = 'https://source-0.example';
+      const candidateSource = 'https://source-1.example';
+      const delayedSource = 'https://source-2.example';
+      final current = _remoteBook(
+        id: 'metadata-ready-current',
+        sourceId: currentSource,
+        sourceLabel: 'Source 0',
+        chapters: [
+          Chapter(
+            id: '$currentSource/chapter',
+            title: '第一章',
+            url: '$currentSource/chapter',
+            paragraphs: const ['当前正文'],
+          ),
+        ],
+      );
+      final candidate = _remoteBook(
+        id: 'metadata-ready-candidate',
+        sourceId: candidateSource,
+        sourceLabel: 'Source 1',
+      );
+      engine.results[candidateSource] = [candidate];
+      engine.loadedChapter = candidate.chapters.single.withParagraphs(const [
+        '候选正文',
+      ]);
+      final delayedSearch = Completer<List<Book>>();
+      engine.delayedSearchSourceId = delayedSource;
+      engine.delayedSearch = delayedSearch;
+      final candidateUpdate = Completer<SourceCandidateSearchResult>();
+      final search = controller.findSourceCandidatesFor(
+        current,
+        onUpdate: (partial, _, _) {
+          if (!candidateUpdate.isCompleted &&
+              partial.candidates.any((book) => book.id == candidate.id)) {
+            candidateUpdate.complete(partial);
+          }
+        },
+      );
+
+      final partial = await candidateUpdate.future.timeout(
+        const Duration(seconds: 1),
+      );
+      try {
+        // A visible candidate is actionable, so it must not arrive before the
+        // mapped chapter and word count are available.
+        expect(partial.infoFor(candidate)?.mappedChapterTitle, '第一章');
+        expect(partial.infoFor(candidate)?.wordCount, 4);
+      } finally {
+        if (!delayedSearch.isCompleted) delayedSearch.complete(const []);
+        await search;
+      }
+    },
+  );
+
+  test(
+    'reports candidates incrementally while sources are still searched',
+    () async {
+      controller.dispose();
+      final engine = _SwitchSourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1)]),
+      );
+      const oldSource = 'https://source-0.example';
+      const otherSource = 'https://source-1.example';
+      final searched = _remoteBook(
+        id: 'search-result',
+        sourceId: oldSource,
+        sourceLabel: 'Source 0',
+      );
+      engine.results[otherSource] = [
+        _remoteBook(
+          id: 'mirrored-result',
+          sourceId: otherSource,
+          sourceLabel: 'Source 1',
+        ),
+      ];
+
+      // 上千个书源要搜几分钟，换源面板靠 onUpdate 边搜边列候选。
+      final updates = <(int, int, List<String>)>[];
+      final found = await controller.findSourceCandidatesFor(
+        searched,
+        onUpdate: (partial, processed, total) => updates.add((
+          processed,
+          total,
+          partial.candidates.map((book) => book.id).toList(),
+        )),
+      );
+
+      expect(updates, isNotEmpty);
+      expect(updates.last.$1, updates.last.$2);
+      expect(
+        updates.map((update) => update.$3).expand((ids) => ids),
+        contains('mirrored-result'),
+      );
+      expect(found.candidates.map((book) => book.id), ['mirrored-result']);
+    },
+  );
+
+  test(
+    'keeps configured source order when searches complete out of order',
+    () async {
+      controller.dispose();
+      final engine = _SwitchSourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+      );
+      const currentSource = 'https://source-0.example';
+      const firstSource = 'https://source-1.example';
+      const secondSource = 'https://source-2.example';
+      final current = _remoteBook(
+        id: 'source-order-current',
+        sourceId: currentSource,
+        sourceLabel: 'Source 0',
+        chapters: [
+          Chapter(
+            id: '$currentSource/chapter',
+            title: '第一章',
+            url: '$currentSource/chapter',
+            paragraphs: const ['当前正文'],
+          ),
+        ],
+      );
+      final first = _remoteBook(
+        id: 'source-order-first',
+        sourceId: firstSource,
+        sourceLabel: 'Source 1',
+      );
+      final second = _remoteBook(
+        id: 'source-order-second',
+        sourceId: secondSource,
+        sourceLabel: 'Source 2',
+      );
+      engine.results
+        ..[firstSource] = [first]
+        ..[secondSource] = [second];
+      final firstSearch = Completer<List<Book>>();
+      final secondCompleted = Completer<void>();
+      engine
+        ..delayedSearchSourceId = firstSource
+        ..delayedSearch = firstSearch
+        ..completedSearchSourceId = secondSource
+        ..searchCompleted = secondCompleted;
+
+      final finding = controller.findSourceCandidatesFor(current);
+      await secondCompleted.future;
+      expect(firstSearch.isCompleted, isFalse);
+      firstSearch.complete([first]);
+
+      final found = await finding;
+      expect(found.candidates.map((candidate) => candidate.id), [
+        first.id,
+        second.id,
+      ]);
+    },
+  );
+
+  test('bounds queued metadata work while sources stream results', () async {
+    controller.dispose();
+    final gate = Completer<void>();
+    final engine = _BoundedMetadataSourceEngine(gate.future);
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([
+        for (var index = 0; index < 40; index++) _searchSource(index),
+      ]),
+    );
+    const currentSource = 'https://source-0.example';
+    final current = _remoteBook(
+      id: 'bounded-backlog-current',
+      sourceId: currentSource,
+      sourceLabel: 'Source 0',
+      chapters: [
+        Chapter(
+          id: '$currentSource/chapter',
+          title: '第一章',
+          url: '$currentSource/chapter',
+          paragraphs: const ['当前正文'],
+        ),
+      ],
+    );
+
+    final finding = controller.findSourceCandidatesFor(current);
+    await engine.metadataStarted.future;
+    // 12 admitted metadata jobs plus four scheduler workers blocked on the
+    // next admission, and the ignored current source: no unbounded 40-source
+    // search can run ahead while the first three catalog loads are paused.
+    await Future<void>.delayed(Duration.zero);
+    expect(engine.metadataLoads, 3);
+    expect(engine.searchStarted, lessThanOrEqualTo(17));
+
+    gate.complete();
+    final found = await finding;
+    expect(found.candidates, hasLength(39));
+  });
+
+  test(
+    'reloads source candidates into a chapter-aware cache for later switching',
+    () async {
+      controller.dispose();
+      final engine = _SwitchSourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1)]),
+      );
+      const currentSource = 'https://source-0.example';
+      const candidateSource = 'https://source-1.example';
+      final current = _remoteBook(
+        id: 'cache-book',
+        sourceId: currentSource,
+        sourceLabel: 'Source 0',
+        chapters: [
+          Chapter(
+            id: '$currentSource/chapter',
+            title: '第一章',
+            url: '$currentSource/chapter',
+            paragraphs: const ['当前正文'],
+          ),
+        ],
+      );
+      await controller.addBook(current);
+      final candidate = _remoteBook(
+        id: 'cached-candidate',
+        sourceId: candidateSource,
+        sourceLabel: 'Source 1',
+      );
+      engine.results[candidateSource] = [candidate];
+      engine.loadedChapter = candidate.chapters.single.withParagraphs(const [
+        '候选正文',
+      ]);
+
+      final refreshed = await controller.reloadSourceCandidatesFor(current);
+      expect(refreshed.candidates.map((book) => book.id), [candidate.id]);
+      expect(refreshed.infoFor(candidate)?.mappedChapterTitle, '第一章');
+      expect(refreshed.infoFor(candidate)?.chapterCount, 1);
+      expect(refreshed.infoFor(candidate)?.wordCount, 4);
+
+      final cached = await controller.sourceCandidateCacheFor(current);
+      expect(cached, isNotNull);
+      expect(cached!.fromCache, isTrue);
+      expect(cached.candidates, hasLength(1));
+      final restoredCandidate = cached.candidates.single;
+      expect(restoredCandidate.id, candidate.id);
+      expect(cached.infoFor(restoredCandidate)?.mappedChapterIndex, 0);
+      expect(cached.infoFor(restoredCandidate)?.wordCount, 4);
+    },
+  );
+
+  test(
+    'newer candidate refresh wins when an older refresh completes last',
+    () async {
+      controller.dispose();
+      final engine = _SwitchSourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1)]),
+      );
+      const currentSource = 'https://source-0.example';
+      const candidateSource = 'https://source-1.example';
+      final current = _remoteBook(
+        id: 'refresh-order-book',
+        sourceId: currentSource,
+        sourceLabel: 'Source 0',
+        chapters: [
+          Chapter(
+            id: '$currentSource/chapter',
+            title: '第一章',
+            url: '$currentSource/chapter',
+            paragraphs: const ['当前正文'],
+          ),
+        ],
+      );
+      await controller.addBook(current);
+      final olderCandidate = _remoteBook(
+        id: 'older-refresh-candidate',
+        sourceId: candidateSource,
+        sourceLabel: 'Source 1',
+      );
+      final newerCandidate = _remoteBook(
+        id: 'newer-refresh-candidate',
+        sourceId: candidateSource,
+        sourceLabel: 'Source 1',
+      );
+      final chapterStarted = Completer<void>();
+      final delayedChapter = Completer<Chapter>();
+      engine
+        ..results[candidateSource] = [olderCandidate]
+        ..delayedSourceId = candidateSource
+        ..chapterStarted = chapterStarted
+        ..delayedChapter = delayedChapter;
+
+      final olderRefresh = controller.reloadSourceCandidatesFor(current);
+      await chapterStarted.future;
+
+      // Start a newer refresh after the old request is already waiting for its
+      // candidate chapter. It must win even though the older request finishes
+      // later.
+      engine
+        ..delayedSourceId = null
+        ..results[candidateSource] = [newerCandidate];
+      final newerRefresh = await controller.reloadSourceCandidatesFor(current);
+      expect(newerRefresh.candidates.map((book) => book.id), [
+        newerCandidate.id,
+      ]);
+
+      delayedChapter.complete(
+        olderCandidate.chapters.single.withParagraphs(const ['旧刷新正文']),
+      );
+      await olderRefresh;
+
+      final cached = await controller.sourceCandidateCacheFor(current);
+      expect(cached, isNotNull);
+      expect(cached!.candidates.map((book) => book.id), [newerCandidate.id]);
+    },
+  );
+
+  test('a loaded candidate list survives a completed source switch', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+    );
+    const currentSource = 'https://source-0.example';
+    const candidateSource = 'https://source-1.example';
+    const otherSource = 'https://source-2.example';
+    final current = _remoteBook(
+      id: 'switch-keeps-cache-book',
+      sourceId: currentSource,
+      sourceLabel: 'Source 0',
+      chapters: [
+        Chapter(
+          id: '$currentSource/chapter',
+          title: '第一章',
+          url: '$currentSource/chapter',
+          paragraphs: const ['当前正文'],
+        ),
+      ],
+    );
+    await controller.addBook(current);
+    final candidate = _remoteBook(
+      id: 'switch-keeps-cache-candidate',
+      sourceId: candidateSource,
+      sourceLabel: 'Source 1',
+    );
+    final other = _remoteBook(
+      id: 'switch-keeps-cache-other',
+      sourceId: otherSource,
+      sourceLabel: 'Source 2',
+    );
+    engine.results[candidateSource] = [candidate];
+    engine.results[otherSource] = [other];
+    await controller.reloadSourceCandidatesFor(current);
+
+    engine.loadedBook = candidate;
+    engine.loadedChapter = candidate.chapters.single.withParagraphs(const [
+      '新源正文',
+    ]);
+    await controller.switchBookSource(current.id, candidate);
+    final switched = controller.book(current.id)!;
+
+    // Rescanning every enabled source on each reopen is what the user
+    // reported; the snapshot must outlive the switch and the moved chapter.
+    final restored = await controller.sourceCandidateCacheFor(switched);
+    expect(restored, isNotNull);
+    expect(restored!.fromCache, isTrue);
+    expect(restored.candidates.map((book) => book.id), [other.id]);
+    expect(restored.infoFor(restored.candidates.single)?.wordCount, isNotNull);
+  });
+
+  test('restores a successful empty source-candidate cache', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(jsonEncode([_searchSource(0)]));
+    const sourceId = 'https://source-0.example';
+    final current = _remoteBook(
+      id: 'empty-source-candidate-cache-book',
+      sourceId: sourceId,
+      sourceLabel: 'Source 0',
+      chapters: [
+        Chapter(
+          id: '$sourceId/chapter',
+          title: '第一章',
+          url: '$sourceId/chapter',
+          paragraphs: const ['当前正文'],
+        ),
+      ],
+    );
+    await controller.addBook(current);
+    await AppRepository(database).saveSourceCandidateCache(
+      SourceCandidateCache(
+        bookId: current.id,
+        originSourceId: sourceId,
+        targetChapterIndex: 0,
+        targetChapterId: current.chapters.first.id,
+        targetChapterTitle: current.chapters.first.title,
+        loadedAt: DateTime.now().toUtc(),
+        entries: const [],
+      ),
+    );
+
+    final cached = await controller.sourceCandidateCacheFor(current);
+    expect(cached, isNotNull);
+    expect(cached!.fromCache, isTrue);
+    expect(cached.candidates, isEmpty);
+  });
+
+  test(
+    'error-completing cancellation does not save a candidate cache',
+    () async {
+      controller.dispose();
+      final engine = _SwitchSourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1)]),
+      );
+      const currentSource = 'https://source-0.example';
+      const candidateSource = 'https://source-1.example';
+      final current = _remoteBook(
+        id: 'cancelled-source-candidate-cache-book',
+        sourceId: currentSource,
+        sourceLabel: 'Source 0',
+        chapters: [
+          Chapter(
+            id: '$currentSource/chapter',
+            title: '第一章',
+            url: '$currentSource/chapter',
+            paragraphs: const ['当前正文'],
+          ),
+        ],
+      );
+      await controller.addBook(current);
+      final candidate = _remoteBook(
+        id: 'cancelled-source-candidate',
+        sourceId: candidateSource,
+        sourceLabel: 'Source 1',
+      );
+      engine.results[candidateSource] = [candidate];
+      final started = Completer<void>();
+      final delayedChapter = Completer<Chapter>();
+      engine
+        ..delayedSourceId = candidateSource
+        ..chapterStarted = started
+        ..delayedChapter = delayedChapter;
+      final abort = Completer<void>();
+      final reloading = controller.reloadSourceCandidatesFor(
+        current,
+        abortTrigger: abort.future,
+      );
+      await started.future;
+      expect(identical(engine.loadBookAbortTrigger, abort.future), isTrue);
+      expect(identical(engine.loadChapterAbortTrigger, abort.future), isTrue);
+      abort.completeError(StateError('sheet closed'));
+      delayedChapter.complete(
+        candidate.chapters.first.withParagraphs(const ['延迟正文']),
+      );
+      await reloading;
+
+      expect(await controller.sourceCandidateCacheFor(current), isNull);
+    },
+  );
+
+  test(
+    'incomplete source reload keeps the last successful candidate cache',
+    () async {
+      controller.dispose();
+      final engine = _SwitchSourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+      );
+      const currentSource = 'https://source-0.example';
+      const candidateSource = 'https://source-1.example';
+      const unavailableSource = 'https://source-2.example';
+      final current = _remoteBook(
+        id: 'failed-reload-cache-book',
+        sourceId: currentSource,
+        sourceLabel: 'Source 0',
+        chapters: [
+          Chapter(
+            id: '$currentSource/chapter',
+            title: '第一章',
+            url: '$currentSource/chapter',
+            paragraphs: const ['当前正文'],
+          ),
+        ],
+      );
+      await controller.addBook(current);
+      final candidate = _remoteBook(
+        id: 'failed-reload-candidate',
+        sourceId: candidateSource,
+        sourceLabel: 'Source 1',
+      );
+      engine.results[candidateSource] = [candidate];
+      await controller.reloadSourceCandidatesFor(current);
+
+      engine.searchFailures[unavailableSource] = const SourceException(
+        'network unavailable',
+      );
+      final incomplete = await controller.reloadSourceCandidatesFor(current);
+      expect(incomplete.hasCompleteCandidateResults, isFalse);
+      expect(incomplete.candidates.map((book) => book.id), [candidate.id]);
+      expect(
+        incomplete.unavailableCandidateSourceIds,
+        contains(unavailableSource),
+      );
+
+      final restored = await controller.sourceCandidateCacheFor(current);
+      expect(restored?.candidates.map((book) => book.id), [candidate.id]);
+    },
+  );
+
+  test('metadata failure keeps the last successful candidate cache', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([_searchSource(0), _searchSource(1)]),
+    );
+    const currentSource = 'https://source-0.example';
+    const candidateSource = 'https://source-1.example';
+    final current = _remoteBook(
+      id: 'metadata-failed-reload-cache-book',
+      sourceId: currentSource,
+      sourceLabel: 'Source 0',
+      chapters: [
+        Chapter(
+          id: '$currentSource/chapter',
+          title: '第一章',
+          url: '$currentSource/chapter',
+          paragraphs: const ['当前正文'],
+        ),
+      ],
+    );
+    await controller.addBook(current);
+    final candidate = _remoteBook(
+      id: 'metadata-failed-reload-candidate',
+      sourceId: candidateSource,
+      sourceLabel: 'Source 1',
+    );
+    engine.results[candidateSource] = [candidate];
+    await controller.reloadSourceCandidatesFor(current);
+
+    engine.failure = const SourceException('catalog unavailable');
+    final incomplete = await controller.reloadSourceCandidatesFor(current);
+    expect(incomplete.hasCompleteCandidateResults, isFalse);
+    expect(incomplete.unavailableCandidateSourceIds, contains(candidateSource));
+    expect(incomplete.candidates, isEmpty);
+
+    // Read the raw snapshot: the display accessor deliberately filters some
+    // entries, whereas this verifies a metadata failure cannot overwrite it.
+    final raw = await controller.repository.sourceCandidateCache(current.id);
+    expect(raw?.entries.map((entry) => entry.candidate.id), [candidate.id]);
+  });
+
+  test(
+    'a source deleted or disabled during metadata loading cannot reenter cache',
+    () async {
+      for (final removeSource in [true, false]) {
+        final scenarioDatabase = await databaseFactoryMemory.openDatabase(
+          'deleted-source-cache-${DateTime.now().microsecondsSinceEpoch}-$removeSource',
+        );
+        final engine = _SwitchSourceEngine();
+        final scenarioController = AppController(
+          AppRepository(scenarioDatabase),
+          engine,
+        );
+        try {
+          await scenarioController.initialize();
+          await scenarioController.importSources(
+            jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+          );
+          const currentSource = 'https://source-0.example';
+          const delayedSource = 'https://source-1.example';
+          const survivingSource = 'https://source-2.example';
+          final current = _remoteBook(
+            id: 'mid-refresh-source-change-$removeSource',
+            sourceId: currentSource,
+            sourceLabel: 'Source 0',
+            chapters: [
+              Chapter(
+                id: '$currentSource/chapter',
+                title: '第一章',
+                url: '$currentSource/chapter',
+                paragraphs: const ['当前正文'],
+              ),
+            ],
+          );
+          await scenarioController.addBook(current);
+          final delayed = _remoteBook(
+            id: 'mid-refresh-delayed-$removeSource',
+            sourceId: delayedSource,
+            sourceLabel: 'Source 1',
+          );
+          final surviving = _remoteBook(
+            id: 'mid-refresh-surviving-$removeSource',
+            sourceId: survivingSource,
+            sourceLabel: 'Source 2',
+          );
+          engine.results
+            ..[delayedSource] = [delayed]
+            ..[survivingSource] = [surviving];
+          final delayedChapter = Completer<Chapter>();
+          final started = Completer<void>();
+          engine
+            ..delayedSourceId = delayedSource
+            ..delayedChapter = delayedChapter
+            ..chapterStarted = started;
+
+          final reloading = scenarioController.reloadSourceCandidatesFor(
+            current,
+          );
+          await started.future;
+          final changingSource = scenarioController.sources.firstWhere(
+            (source) => source.id == delayedSource,
+          );
+          if (removeSource) {
+            await scenarioController.deleteSource(delayedSource);
+          } else {
+            await scenarioController.setSourceEnabled(changingSource, false);
+          }
+          delayedChapter.complete(
+            delayed.chapters.single.withParagraphs(const ['延迟正文']),
+          );
+          await reloading;
+
+          final raw = await scenarioController.repository.sourceCandidateCache(
+            current.id,
+          );
+          expect(raw?.entries.map((entry) => entry.candidate.id), [
+            surviving.id,
+          ]);
+        } finally {
+          scenarioController.dispose();
+          await scenarioDatabase.close();
+        }
+      }
+    },
+  );
+
+  test(
+    'an incomplete first load still becomes the snapshot for the next opening',
+    () async {
+      controller.dispose();
+      final engine = _SwitchSourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+      );
+      const currentSource = 'https://source-0.example';
+      const candidateSource = 'https://source-1.example';
+      const unavailableSource = 'https://source-2.example';
+      final current = _remoteBook(
+        id: 'partial-first-load-book',
+        sourceId: currentSource,
+        sourceLabel: 'Source 0',
+        chapters: [
+          Chapter(
+            id: '$currentSource/chapter',
+            title: '第一章',
+            url: '$currentSource/chapter',
+            paragraphs: const ['当前正文'],
+          ),
+        ],
+      );
+      await controller.addBook(current);
+      final candidate = _remoteBook(
+        id: 'partial-first-load-candidate',
+        sourceId: candidateSource,
+        sourceLabel: 'Source 1',
+      );
+      engine.results[candidateSource] = [candidate];
+      engine.searchFailures[unavailableSource] = const SourceException(
+        'network unavailable',
+      );
+
+      final first = await controller.reloadSourceCandidatesFor(current);
+      expect(first.hasCompleteCandidateResults, isFalse);
+      // Without a seeded snapshot the book could never cache anything while one
+      // of its sources is dead, so every reopening would rescan every source.
+      final restored = await controller.sourceCandidateCacheFor(current);
+      expect(restored, isNotNull);
+      expect(restored!.fromCache, isTrue);
+      expect(restored.candidates.map((book) => book.id), [candidate.id]);
+    },
+  );
+
+
+
+  test(
     'failed source-switch persistence never publishes replacement state',
     () async {
       controller.dispose();
@@ -584,6 +1376,116 @@ void main() {
       expect(stored.position.chapterIndex, 1);
       expect(stored.position.paragraphIndex, 1);
       expect(engine.chapterRequests, [candidate.chapters.first.id]);
+    },
+  );
+
+
+  test(
+    'source switch rejects a target source deleted while it loads',
+    () async {
+      controller.dispose();
+      const oldSource = 'https://source-0.example';
+      const targetSource = 'https://source-1.example';
+      final engine = _SwitchSourceEngine()
+        ..delayedSourceId = targetSource
+        ..delayedChapter = Completer<Chapter>()
+        ..chapterStarted = Completer<void>();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1)]),
+      );
+      final current = _remoteBook(
+        id: 'target-deleted-during-switch',
+        sourceId: oldSource,
+        sourceLabel: 'Source 0',
+      );
+      final candidate = _remoteBook(
+        id: 'target-replacement',
+        sourceId: targetSource,
+        sourceLabel: 'Source 1',
+      );
+      await controller.addBook(current);
+      engine.loadedBook = candidate;
+
+      final rejected = expectLater(
+        controller.switchBookSource(current.id, candidate),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.toString(),
+            'target source deletion',
+            contains('目标书源已移除或停用'),
+          ),
+        ),
+      );
+      await engine.chapterStarted!.future;
+      await controller.deleteSource(targetSource);
+      engine.delayedChapter!.complete(
+        candidate.chapters.single.withParagraphs(const ['新正文']),
+      );
+      await rejected;
+
+      expect(controller.book(current.id)!.sourceId, oldSource);
+      final stored = (await controller.repository.books()).singleWhere(
+        (book) => book.id == current.id,
+      );
+      expect(stored.sourceId, oldSource);
+    },
+  );
+
+  test(
+    'source switch rejects a target source disabled while it loads',
+    () async {
+      controller.dispose();
+      const oldSource = 'https://source-0.example';
+      const targetSource = 'https://source-1.example';
+      final engine = _SwitchSourceEngine()
+        ..delayedSourceId = targetSource
+        ..delayedChapter = Completer<Chapter>()
+        ..chapterStarted = Completer<void>();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([_searchSource(0), _searchSource(1)]),
+      );
+      final current = _remoteBook(
+        id: 'target-disabled-during-switch',
+        sourceId: oldSource,
+        sourceLabel: 'Source 0',
+      );
+      final candidate = _remoteBook(
+        id: 'target-disabled-replacement',
+        sourceId: targetSource,
+        sourceLabel: 'Source 1',
+      );
+      await controller.addBook(current);
+      engine.loadedBook = candidate;
+
+      final rejected = expectLater(
+        controller.switchBookSource(current.id, candidate),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.toString(),
+            'target source disable',
+            contains('目标书源已移除或停用'),
+          ),
+        ),
+      );
+      await engine.chapterStarted!.future;
+      final target = controller.sources.singleWhere(
+        (source) => source.id == targetSource,
+      );
+      await controller.setSourceEnabled(target, false);
+      engine.delayedChapter!.complete(
+        candidate.chapters.single.withParagraphs(const ['新正文']),
+      );
+      await rejected;
+
+      expect(controller.book(current.id)!.sourceId, oldSource);
+      final stored = (await controller.repository.books()).singleWhere(
+        (book) => book.id == current.id,
+      );
+      expect(stored.sourceId, oldSource);
     },
   );
 

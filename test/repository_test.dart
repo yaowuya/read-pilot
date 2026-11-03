@@ -5,6 +5,7 @@ import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
 import 'package:read_pilot/domain/reader_settings.dart';
 import 'package:read_pilot/domain/source_import.dart';
+import 'package:read_pilot/domain/source_switch_candidate.dart';
 import 'package:read_pilot/services/source_importer.dart';
 import 'package:sembast/sembast_memory.dart';
 
@@ -28,6 +29,46 @@ Map<String, dynamic> _sourceJson({
   },
   'ruleContent': {'content': '@CSS:article@html'},
 };
+
+Book _sourceCandidateBook({required String id, required String sourceId}) =>
+    Book(
+      id: id,
+      title: '候选书 $id',
+      author: '候选作者',
+      description: '候选简介',
+      category: '测试',
+      coverStyle: 2,
+      sourceLabel: '候选源',
+      sourceId: sourceId,
+      url: '$sourceId/books/$id',
+      coverUrl: '$sourceId/covers/$id.png',
+      chapters: [
+        Chapter(
+          id: '$id-chapter',
+          title: '候选章节',
+          url: '$sourceId/chapters/$id',
+          paragraphs: const ['候选缓存内容'],
+        ),
+      ],
+      position: const ReadingPosition(chapterIndex: 0, paragraphIndex: 1),
+      lastOpenedAt: DateTime.utc(2026, 1, 2),
+      finished: true,
+      addedAt: DateTime.utc(2026, 1, 1),
+    );
+
+Book _shelfBook(String id) => Book(
+  id: id,
+  title: '书架书 $id',
+  author: '书架作者',
+  description: '书架简介',
+  category: '测试',
+  coverStyle: 0,
+  sourceLabel: '书架源',
+  sourceId: 'https://shelf.example',
+  url: 'https://shelf.example/books/$id',
+  chapters: [Chapter(id: '$id-chapter', title: '第一章', url: '$id-chapter')],
+  addedAt: DateTime.utc(2026, 1, 1),
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -201,6 +242,341 @@ void main() {
     expect(await repository.sourceState('https://second.example'), isNull);
   });
 
+  test('source candidate cache round-trips candidates and metadata', () async {
+    final loadedAt = DateTime.utc(2026, 4, 3, 12, 34, 56);
+    final candidate = _sourceCandidateBook(
+      id: 'round-trip-candidate',
+      sourceId: 'https://round-trip.example',
+    );
+    await repository.saveBook(_shelfBook('round-trip-book'));
+    await repository.saveSourceCandidateCache(
+      SourceCandidateCache(
+        bookId: 'round-trip-book',
+        originSourceId: 'https://round-trip-origin.example',
+        targetChapterIndex: 2,
+        targetChapterId: 'round-trip-origin-chapter',
+        targetChapterTitle: '第三章',
+        loadedAt: loadedAt,
+        failedSources: 2,
+        entries: [
+          SourceCandidateCacheEntry(
+            candidate: candidate,
+            info: const SourceCandidateInfo(
+              chapterCount: 87,
+              mappedChapterIndex: 42,
+              mappedChapterTitle: '第四十三章',
+              wordCount: 54321,
+              errorMessage: '目录读取失败',
+            ),
+          ),
+        ],
+      ),
+    );
+
+    final restored = await AppRepository(
+      database,
+    ).sourceCandidateCache('round-trip-book', now: loadedAt);
+
+    expect(restored, isNotNull);
+    final cache = restored!;
+    expect(cache.bookId, 'round-trip-book');
+    expect(cache.originSourceId, 'https://round-trip-origin.example');
+    expect(cache.targetChapterIndex, 2);
+    expect(cache.targetChapterId, 'round-trip-origin-chapter');
+    expect(cache.targetChapterTitle, '第三章');
+    expect(cache.loadedAt, loadedAt);
+    expect(cache.failedSources, 2);
+    final entry = cache.entries.single;
+    expect(entry.candidate.toJson(), candidate.toJson());
+    final info = entry.info;
+    expect(info, isNotNull);
+    expect(info!.chapterCount, 87);
+    expect(info.mappedChapterIndex, 42);
+    expect(info.mappedChapterTitle, '第四十三章');
+    expect(info.wordCount, 54321);
+    expect(info.errorMessage, '目录读取失败');
+  });
+
+  test(
+    'source candidate cache is fresh at ten days and expires after',
+    () async {
+      final loadedAt = DateTime.utc(2026, 1, 1);
+      const bookId = 'freshness-book';
+      const targetTitle = '第一章';
+      await repository.saveBook(_shelfBook(bookId));
+      await repository.saveSourceCandidateCache(
+        SourceCandidateCache(
+          bookId: bookId,
+          originSourceId: 'https://freshness-origin.example',
+          targetChapterIndex: 0,
+          targetChapterId: 'freshness-origin-chapter',
+          targetChapterTitle: targetTitle,
+          loadedAt: loadedAt,
+          entries: [
+            SourceCandidateCacheEntry(
+              candidate: _sourceCandidateBook(
+                id: 'freshness-candidate',
+                sourceId: 'https://freshness.example',
+              ),
+            ),
+          ],
+        ),
+      );
+
+      final expiresAt = loadedAt.add(SourceCandidateCache.lifetime);
+      expect(
+        await repository.sourceCandidateCache(bookId, now: loadedAt),
+        isNotNull,
+      );
+      expect(
+        await repository.sourceCandidateCache(bookId, now: expiresAt),
+        isNotNull,
+      );
+      expect(
+        await repository.sourceCandidateCache(
+          bookId,
+          now: expiresAt.add(const Duration(microseconds: 1)),
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'a partial snapshot only seeds a book that has no snapshot yet',
+    () async {
+      final loadedAt = DateTime.utc(2026, 1, 1);
+      const bookId = 'partial-seed-book';
+      await repository.saveBook(_shelfBook(bookId));
+      SourceCandidateCache snapshot(String candidateId, DateTime at) =>
+          SourceCandidateCache(
+            bookId: bookId,
+            originSourceId: 'https://partial-origin.example',
+            targetChapterIndex: 0,
+            targetChapterId: 'partial-origin-chapter',
+            targetChapterTitle: '第一章',
+            loadedAt: at,
+            entries: [
+              SourceCandidateCacheEntry(
+                candidate: _sourceCandidateBook(
+                  id: candidateId,
+                  sourceId: 'https://partial.example',
+                ),
+              ),
+            ],
+          );
+
+      // No snapshot exists yet: even an incomplete refresh must persist, or a
+      // book whose candidate list always loses a few dead sources would rescan
+      // on every opening.
+      expect(
+        await repository.saveSourceCandidateCache(
+          snapshot('seeded-candidate', loadedAt),
+          replaceFreshExisting: false,
+          now: loadedAt,
+        ),
+        isTrue,
+      );
+      expect(
+        (await repository.sourceCandidateCache(
+          bookId,
+          now: loadedAt,
+        ))!.entries.single.candidate.id,
+        'seeded-candidate',
+      );
+
+      // A later incomplete refresh keeps the seeded snapshot.
+      expect(
+        await repository.saveSourceCandidateCache(
+          snapshot('partial-later', loadedAt.add(const Duration(hours: 1))),
+          replaceFreshExisting: false,
+          now: loadedAt.add(const Duration(hours: 1)),
+        ),
+        isFalse,
+      );
+      expect(
+        (await repository.sourceCandidateCache(
+          bookId,
+          now: loadedAt,
+        ))!.entries.single.candidate.id,
+        'seeded-candidate',
+      );
+
+      // The manual refresh is complete, so it replaces the seeded snapshot.
+      final completeAt = loadedAt.add(const Duration(hours: 2));
+      expect(
+        await repository.saveSourceCandidateCache(
+          snapshot('complete-refresh', completeAt),
+          now: completeAt,
+        ),
+        isTrue,
+      );
+      expect(
+        (await repository.sourceCandidateCache(
+          bookId,
+          now: completeAt,
+        ))!.entries.single.candidate.id,
+        'complete-refresh',
+      );
+    },
+  );
+
+  test('removing a book deletes only its source candidate caches', () async {
+    final books = await repository.books();
+    final removedBook = books[0];
+    final retainedBook = books[1];
+    final now = DateTime.utc(2026, 1, 1);
+    await repository.saveSourceCandidateCache(
+      SourceCandidateCache(
+        bookId: removedBook.id,
+        originSourceId: 'https://removed-book-origin.example',
+        targetChapterIndex: 0,
+        targetChapterId: removedBook.chapters.first.id,
+        targetChapterTitle: removedBook.chapters.first.title,
+        loadedAt: now,
+        entries: [
+          SourceCandidateCacheEntry(
+            candidate: _sourceCandidateBook(
+              id: 'removed-book-candidate',
+              sourceId: 'https://removed-book.example',
+            ),
+          ),
+        ],
+      ),
+    );
+    await repository.saveSourceCandidateCache(
+      SourceCandidateCache(
+        bookId: retainedBook.id,
+        originSourceId: 'https://retained-book-origin.example',
+        targetChapterIndex: 0,
+        targetChapterId: retainedBook.chapters.first.id,
+        targetChapterTitle: retainedBook.chapters.first.title,
+        loadedAt: now,
+        entries: [
+          SourceCandidateCacheEntry(
+            candidate: _sourceCandidateBook(
+              id: 'retained-book-candidate',
+              sourceId: 'https://retained-book.example',
+            ),
+          ),
+        ],
+      ),
+    );
+
+    await repository.removeBook(removedBook.id);
+
+    expect(
+      await repository.sourceCandidateCache(removedBook.id, now: now),
+      isNull,
+    );
+    final retained = await repository.sourceCandidateCache(
+      retainedBook.id,
+      now: now,
+    );
+    expect(retained?.entries.single.candidate.id, 'retained-book-candidate');
+  });
+
+  test(
+    'deleting a source prunes matching candidates and empty caches',
+    () async {
+      const deletedSourceId = 'https://deleted-source.example';
+      final now = DateTime.utc(2026, 1, 1);
+      await repository.saveBooks([
+        _shelfBook('mixed-cache-book'),
+        _shelfBook('empty-cache-book'),
+        _shelfBook('origin-deleted-cache-book'),
+      ]);
+      await repository.saveSourceCandidateCache(
+        SourceCandidateCache(
+          bookId: 'mixed-cache-book',
+          originSourceId: 'https://mixed-origin.example',
+          targetChapterIndex: 4,
+          targetChapterId: 'mixed-origin-chapter',
+          targetChapterTitle: '第五章',
+          loadedAt: now,
+          failedSources: 1,
+          entries: [
+            SourceCandidateCacheEntry(
+              candidate: _sourceCandidateBook(
+                id: 'deleted-source-candidate',
+                sourceId: deletedSourceId,
+              ),
+            ),
+            SourceCandidateCacheEntry(
+              candidate: _sourceCandidateBook(
+                id: 'retained-source-candidate',
+                sourceId: 'https://retained-source.example',
+              ),
+              info: const SourceCandidateInfo(wordCount: 321),
+            ),
+          ],
+        ),
+      );
+      await repository.saveSourceCandidateCache(
+        SourceCandidateCache(
+          bookId: 'empty-cache-book',
+          originSourceId: 'https://empty-origin.example',
+          targetChapterIndex: 1,
+          targetChapterId: 'empty-origin-chapter',
+          targetChapterTitle: '第二章',
+          loadedAt: now,
+          entries: [
+            SourceCandidateCacheEntry(
+              candidate: _sourceCandidateBook(
+                id: 'only-deleted-source-candidate',
+                sourceId: deletedSourceId,
+              ),
+            ),
+          ],
+        ),
+      );
+      await repository.saveSourceCandidateCache(
+        SourceCandidateCache(
+          bookId: 'origin-deleted-cache-book',
+          originSourceId: deletedSourceId,
+          targetChapterIndex: 0,
+          targetChapterId: 'origin-deleted-chapter',
+          targetChapterTitle: '第一章',
+          loadedAt: now,
+          entries: [
+            SourceCandidateCacheEntry(
+              candidate: _sourceCandidateBook(
+                id: 'otherwise-retained-candidate',
+                sourceId: 'https://retained-source.example',
+              ),
+            ),
+          ],
+        ),
+      );
+
+      await repository.deleteSource(deletedSourceId);
+
+      final pruned = await repository.sourceCandidateCache(
+        'mixed-cache-book',
+        now: now,
+      );
+      expect(pruned, isNotNull);
+      expect(pruned!.failedSources, 1);
+      expect(pruned.entries, hasLength(1));
+      expect(pruned.entries.single.candidate.id, 'retained-source-candidate');
+      expect(pruned.entries.single.info?.wordCount, 321);
+      expect(
+        await repository.sourceCandidateCache('empty-cache-book', now: now),
+        isNull,
+      );
+      // The snapshot belongs to the book, so deleting the source it was
+      // measured from keeps the remaining candidates selectable.
+      final originDeleted = await repository.sourceCandidateCache(
+        'origin-deleted-cache-book',
+        now: now,
+      );
+      expect(
+        originDeleted?.entries.single.candidate.id,
+        'otherwise-retained-candidate',
+      );
+    },
+  );
+
   test('source switch replaces a book and its bookmarks atomically', () async {
     final current = Book(
       id: 'switch-book',
@@ -256,8 +632,85 @@ void main() {
       chapterIndex: 0,
       paragraphIndex: 3,
     );
+    await repository.saveSourceCandidateCache(
+      SourceCandidateCache(
+        bookId: current.id,
+        originSourceId: current.sourceId!,
+        targetChapterIndex: 0,
+        targetChapterId: current.chapters.first.id,
+        targetChapterTitle: current.chapters.first.title,
+        loadedAt: DateTime.utc(2026, 1, 1),
+        entries: [
+          SourceCandidateCacheEntry(
+            candidate: _sourceCandidateBook(
+              id: 'switch-candidate',
+              sourceId: 'https://candidate.example',
+            ),
+          ),
+        ],
+      ),
+    );
 
     await repository.replaceBookSource(replacement, [mappedNote]);
+    // Reopening 换源 after the switch must still show the candidates the user
+    // already loaded, so the snapshot outlives the source replacement.
+    final retainedCache = await repository.sourceCandidateCache(
+      current.id,
+      now: DateTime.utc(2026, 1, 1),
+    );
+    expect(retainedCache, isNotNull);
+    expect(retainedCache!.entries.single.candidate.id, 'switch-candidate');
+
+    // A slow search started before a manual refresh must not overwrite the
+    // newer snapshot.
+    expect(
+      await repository.saveSourceCandidateCache(
+        SourceCandidateCache(
+          bookId: current.id,
+          originSourceId: 'https://new.example',
+          targetChapterIndex: 0,
+          targetChapterId: 'new-chapter',
+          targetChapterTitle: '第一章',
+          loadedAt: DateTime.utc(2025, 12, 31),
+          entries: const [],
+        ),
+        now: DateTime.utc(2026, 1, 1),
+      ),
+      isFalse,
+    );
+    expect(
+      (await repository.sourceCandidateCache(
+        current.id,
+        now: DateTime.utc(2026, 1, 1),
+      ))!.entries.single.candidate.id,
+      'switch-candidate',
+    );
+
+    // Clock precision can make two requests share the same start timestamp.
+    // The first completed save stays authoritative instead of letting an older
+    // request overwrite it on an equality tie.
+    expect(
+      await repository.saveSourceCandidateCache(
+        SourceCandidateCache(
+          bookId: current.id,
+          originSourceId: 'https://equal.example',
+          targetChapterIndex: 0,
+          targetChapterId: 'equal-chapter',
+          targetChapterTitle: '第一章',
+          loadedAt: DateTime.utc(2026, 1, 1),
+          entries: const [],
+        ),
+        now: DateTime.utc(2026, 1, 1),
+      ),
+      isFalse,
+    );
+    expect(
+      (await repository.sourceCandidateCache(
+        current.id,
+        now: DateTime.utc(2026, 1, 1),
+      ))!.entries.single.candidate.id,
+      'switch-candidate',
+    );
 
     final restored = (await repository.books()).firstWhere(
       (book) => book.id == current.id,
