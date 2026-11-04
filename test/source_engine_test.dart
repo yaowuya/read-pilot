@@ -732,6 +732,90 @@ void main() {
     expect(requested.map((uri) => uri.path), ['/book/1', '/toc/1', '/toc/2']);
   });
 
+  test('keeps following a long TOC well past fifty pages', () async {
+    // 真实书源（如某些长篇站）每页只列几十章，几百页目录很常见；旧上限 50 页会让
+    // 这类书在「加入书架并阅读」时直接报错，连目录都拿不到。
+    const pageCount = 120;
+    const chaptersPerPage = 50;
+    final requested = <Uri>[];
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        requested.add(request.url);
+        final path = request.url.path;
+        if (path == '/book/1') {
+          return http.Response(
+            '<h1>长篇目录书</h1><a class="toc" href="/toc/1">目录</a>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          );
+        }
+        final page = int.parse(path.split('/').last);
+        final links = List.generate(
+          chaptersPerPage,
+          (i) =>
+              '<a href="/chapter/${page * chaptersPerPage + i}">第 ${page * chaptersPerPage + i} 章</a>',
+        ).join();
+        final next = page < pageCount
+            ? '<a class="next" href="/toc/${page + 1}">下一页</a>'
+            : '';
+        return http.Response(
+          '<div id="chapters">$links</div>$next',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson();
+    (raw['ruleToc'] as Map)['nextTocUrl'] = '@CSS:a.next@href';
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final book = await engine.loadBook(source, bookResult());
+
+    expect(requested, hasLength(1 + pageCount));
+    expect(book.chapters, hasLength(pageCount * chaptersPerPage));
+    // 第一页是 /toc/1，所以编号从第 50 章开始，最后一页到第 6049 章。
+    expect(book.chapters.first.title, '第 $chaptersPerPage 章');
+    expect(
+      book.chapters.last.title,
+      '第 ${(pageCount + 1) * chaptersPerPage - 1} 章',
+    );
+  });
+
+  test('stops a TOC whose next page never yields new chapters', () async {
+    // 有些书源会返回永不重复的“下一页”地址，但每页内容都一样。旧实现会一直翻到
+    // 页数上限再整本报错；现在应当保留已解析目录并正常返回。
+    final requested = <Uri>[];
+    final engine = SourceEngine(
+      client: MockClient((request) async {
+        requested.add(request.url);
+        if (request.url.path == '/book/1') {
+          return http.Response(
+            '<h1>卡住目录书</h1><a class="toc" href="/toc/1">目录</a>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          );
+        }
+        final page = int.parse(request.url.pathSegments.last);
+        return http.Response(
+          '<div id="chapters"><a href="/chapter/1">第一章</a></div>'
+          '<a class="next" href="/toc/${page + 1}">下一页</a>',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(engine.close);
+    final raw = sourceJson();
+    (raw['ruleToc'] as Map)['nextTocUrl'] = '@CSS:a.next@href';
+    final source = importer.parse(jsonEncode(raw)).single;
+
+    final book = await engine.loadBook(source, bookResult());
+
+    expect(book.chapters.map((chapter) => chapter.title), ['第一章']);
+    expect(requested.length, lessThan(20));
+  });
+
   test('follows bounded content pagination and stops cycles', () async {
     final requested = <Uri>[];
     final engine = SourceEngine(
@@ -1089,7 +1173,6 @@ void main() {
       ),
     );
   });
-
 
   test(
     'cancels catalog loading even when the HTTP client ignores abort',

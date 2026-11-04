@@ -43,7 +43,18 @@ class SourceEngine {
 
   static const _maxChapters = 10000;
   static const _maxDomNodes = 50000;
-  static const _maxTocPages = 10;
+
+  /// 目录分页的请求次数上限。目录页通常只列几十章，500 页早已远超
+  /// [_maxChapters] 能容纳的章节数，所以真实书源不会撞到它；它只用来兜住
+  /// “下一页永远有新内容”的病态书源。到上限时保留已解析的目录继续阅读，
+  /// 不再整本书报错——早先的固定页数上限会让长篇书籍无法加入书架。
+  static const _maxTocPages = 500;
+
+  /// 连续这么多页都没有解析到新章节，就认为目录已经走到尽头。有的书源会给出
+  /// 不断变化的“下一页”链接却始终重复同样的内容，此时保留已解析的目录继续使用，
+  /// 而不是让整本书因为目录翻不完而无法加入书架。
+  static const _maxStalledTocPages = 10;
+
   static const _maxContentPages = 10;
 
   final RequestPlanner _planner;
@@ -243,12 +254,13 @@ class SourceEngine {
     final chapters = <String, Chapter>{};
     final visitedTocPages = <String>{};
     var nextTocUri = tocUri;
+    var stalledPages = 0;
     for (var page = 0; ; page++) {
       await _throwIfCancelled(abortTrigger);
       if (!visitedTocPages.add(nextTocUri.toString())) break;
-      if (page >= _maxTocPages) {
-        throw const SourceException('目录分页超过 $_maxTocPages 页，已停止读取。');
-      }
+      // 到请求次数上限时保留已解析的目录：长篇书籍的目录可能有上百页，截断这里
+      // 会整本书加不进书架，而丢掉尾部章节比“完全无法阅读”要好得多。
+      if (page >= _maxTocPages) break;
       final toc = nextTocUri == info.detail.url
           ? info.detail
           : await _fetch(
@@ -257,6 +269,7 @@ class SourceEngine {
               abortTrigger: abortTrigger,
             );
       final tocRoot = _ruleRoot(toc.body, tocRules.values);
+      final knownChapters = chapters.length;
       for (final element in _interpreter.select(
         tocRoot,
         _requiredRule(tocRules, 'ruleToc', 'chapterList'),
@@ -279,6 +292,10 @@ class SourceEngine {
           throw const SourceException('目录超过 $_maxChapters 章，已停止导入，未保存截断结果。');
         }
       }
+      stalledPages = chapters.length == knownChapters ? stalledPages + 1 : 0;
+      // 书源可能给出永不重复的“下一页”地址却一直返回相同内容，此时同样保留
+      // 已解析的目录，避免为了一个坏掉的翻页规则让整本书无法阅读。
+      if (stalledPages >= _maxStalledTocPages) break;
       final nextValue = _interpreter.extractFirst(
         tocRoot,
         tocRules['nextTocUrl'],
