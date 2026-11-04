@@ -853,44 +853,92 @@ void main() {
     expect(requested.map((uri) => uri.path), ['/chapter/1', '/chapter/2']);
   });
 
-  test('rejects content pagination beyond ten pages', () async {
-    final requested = <Uri>[];
-    final engine = SourceEngine(
-      client: MockClient((request) async {
-        requested.add(request.url);
-        final page = int.parse(request.url.pathSegments.last);
-        return http.Response(
-          '<article><p>第 $page 页。</p></article>'
-          '<a class="next" href="/chapter/${page + 1}">下一页</a>',
-          200,
-          headers: {'content-type': 'text/html; charset=utf-8'},
-        );
-      }),
-    );
-    addTearDown(engine.close);
-    final raw = sourceJson();
-    (raw['ruleContent'] as Map)['nextContentUrl'] = '@CSS:a.next@href';
-    final source = importer.parse(jsonEncode(raw)).single;
+  test(
+    'stops content pagination at the safety cap and keeps what it read',
+    () async {
+      final requested = <Uri>[];
+      final engine = SourceEngine(
+        client: MockClient((request) async {
+          requested.add(request.url);
+          final page = int.parse(request.url.pathSegments.last);
+          return http.Response(
+            '<article><p>第 $page 页。</p></article>'
+            '<a class="next" href="/chapter/${page + 1}">下一页</a>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(engine.close);
+      final raw = sourceJson();
+      (raw['ruleContent'] as Map)['nextContentUrl'] = '@CSS:a.next@href';
+      final source = importer.parse(jsonEncode(raw)).single;
 
-    await expectLater(
-      engine.loadChapter(
+      final chapter = await engine.loadChapter(
         source,
         Chapter(
           id: 'chapter-1',
           title: '超长分页章',
           url: 'https://books.example/chapter/1',
         ),
-      ),
-      throwsA(
-        isA<SourceException>().having(
-          (error) => error.message,
-          'message',
-          contains('10'),
+      );
+
+      // 停在上限而不是整章报错：正文保留已取到的页。
+      expect(requested, hasLength(50));
+      expect(chapter.paragraphs, hasLength(50));
+      expect(chapter.paragraphs.first, '第 1 页。');
+      expect(chapter.paragraphs.last, '第 50 页。');
+    },
+  );
+
+  test(
+    'formats html content rules even when a regex tail follows @html',
+    () async {
+      // 真实书源（五八书阁）的规则：`.TxtContent@html##<script.*?</script>|…`。
+      // 选择器以 @html 结尾但整串不是，曾经导致整段 HTML 标签被当正文展示。
+      final engine = SourceEngine(
+        client: MockClient((request) async {
+          return http.Response(
+            '<html><body><div class="TxtContent"><p>　　第一段正文。</p><br/>'
+            '　　第二段正文。</div>'
+            '<a id="pt_next" href="/wuba/1/2_2.html">下一页</a></body></html>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          );
+        }),
+      );
+      addTearDown(engine.close);
+      final raw = sourceJson();
+      (raw['ruleContent'] as Map)['content'] =
+          '.TxtContent@html##<script.*?</script>|…[^<]*<br[^>]*>[\\s\\S]*'
+          '|本章没完[\\s\\S]*|温馨提示[\\s\\S]*';
+      (raw['ruleContent'] as Map)['nextContentUrl'] = 'text.下一页@href';
+      final source = importer.parse(jsonEncode(raw)).single;
+
+      final chapter = await engine.loadChapter(
+        source,
+        Chapter(
+          id: 'chapter-1',
+          title: '第一章',
+          url: 'https://books.example/wuba/1/2_1.html',
         ),
-      ),
-    );
-    expect(requested, hasLength(10));
-  });
+      );
+
+      expect(
+        chapter.paragraphs.any((paragraph) => paragraph.contains('<')),
+        isFalse,
+        reason: 'raw tags leaked: ${chapter.paragraphs.take(3).toList()}',
+      );
+      expect(
+        chapter.paragraphs.any((paragraph) => paragraph.contains('第一段正文')),
+        isTrue,
+      );
+      expect(
+        chapter.paragraphs.any((paragraph) => paragraph.contains('第二段正文')),
+        isTrue,
+      );
+    },
+  );
 
   test('does not promote javascript links into navigable books', () async {
     final client = MockClient(

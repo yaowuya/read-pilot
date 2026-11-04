@@ -29,6 +29,17 @@ void main() {
     await database.close();
   });
 
+  // 阅读页默认沉浸式，操作顶栏/底栏前需先点正文中部唤出工具栏。
+  Future<void> showChrome(WidgetTester tester) async {
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final body = paged.evaluate().isNotEmpty
+        ? paged
+        : find.byKey(const Key('reader-scrolling-view'));
+    if (find.byKey(const Key('reader-settings')).evaluate().isNotEmpty) return;
+    await tester.tapAt(tester.getRect(body).center);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('reader saves a bounded current-paragraph mark', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -42,6 +53,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-mark')));
@@ -71,6 +83,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-mark')));
@@ -78,6 +91,7 @@ void main() {
     await tester.tap(find.byKey(const Key('reader-mark-save')));
     await tester.pumpAndSettle();
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-mark-manager')));
@@ -102,6 +116,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
 
@@ -154,6 +169,7 @@ void main() {
     );
     selectionArea.onSelectionChanged!(const SelectedContent(plainText: '江南'));
     await tester.pump();
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
 
@@ -224,6 +240,7 @@ void main() {
     await tester.pump();
     selectionArea.onSelectionChanged!(null);
     await tester.pump();
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
 
@@ -276,6 +293,7 @@ void main() {
     );
     selectionArea.onSelectionChanged!(const SelectedContent(plainText: '江南'));
     await tester.pump();
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const Key('reader-flow-paged')));
@@ -370,6 +388,7 @@ void main() {
           .every((paragraph) => paragraph.highlights.isEmpty),
       isTrue,
     );
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     expect(
@@ -427,10 +446,12 @@ void main() {
     );
     selectionArea.onSelectionChanged!(const SelectedContent(plainText: '江南'));
     await tester.pump();
+    await showChrome(tester);
     await tester.tap(find.byTooltip('章节目录'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('toc-chapter-1')));
     await tester.pumpAndSettle();
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
 

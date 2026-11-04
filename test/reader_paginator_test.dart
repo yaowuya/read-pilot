@@ -176,6 +176,49 @@ void main() {
     }
   });
 
+  test('pages never end with a paragraph gap under the last line', () {
+    // 页尾的段间距会变成正文与页脚之间的空白，让每页正文下沿忽高忽低；
+    // 分页器必须把它归零，只保留页内两段之间的间距。
+    final paragraphs = List.generate(30, (index) => '第 $index 段正文。' * 12);
+    final layout = ReaderPaginator.paginate(
+      title: '页尾间距',
+      paragraphs: paragraphs,
+      maxWidth: 312,
+      maxHeight: 480,
+      bodyStyle: bodyStyle,
+      titleStyle: titleStyle,
+      firstPageChromeHeight: 16,
+      paragraphSpacing: 20,
+    );
+
+    expect(layout.pages.length, greaterThan(2));
+    for (final page in layout.pages) {
+      expect(page.fragments.last.trailingSpacing, 0);
+    }
+    for (var index = 0; index < paragraphs.length; index++) {
+      expect(layout.textForParagraph(index), paragraphs[index]);
+    }
+  });
+
+  test('keeps a real gap between two paragraphs sharing a page', () {
+    // 页内两段之间的间距不能被一起抹掉，否则正文会挤成一整段。
+    final layout = ReaderPaginator.paginate(
+      title: '页内间距',
+      paragraphs: ['短段落一。', '短段落二。'],
+      maxWidth: 312,
+      maxHeight: 480,
+      bodyStyle: bodyStyle,
+      titleStyle: titleStyle,
+      firstPageChromeHeight: 16,
+      paragraphSpacing: 20,
+    );
+
+    final firstPage = layout.pages.single;
+    expect(firstPage.fragments, hasLength(2));
+    expect(firstPage.fragments.first.trailingSpacing, 20);
+    expect(firstPage.fragments.last.trailingSpacing, 0);
+  });
+
   test('maps a paragraph anchor to a stable page', () {
     final layout = ReaderPaginator.paginate(
       title: '第二章',

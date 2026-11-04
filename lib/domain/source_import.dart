@@ -50,15 +50,78 @@ class SourceImportProvenance {
   final String? contentType;
 }
 
+/// One payload entry that could not be represented as a source.
+///
+/// Aggregate feeds ship thousands of entries and routinely carry a handful of
+/// malformed ones. Rejecting those entries must not cost the caller the rest of
+/// the feed, but they must stay visible instead of being silently dropped.
+class SourceImportSkip {
+  const SourceImportSkip({required this.label, required this.reason});
+
+  /// Best-effort identity of the rejected entry, never empty.
+  ///
+  /// Falls back to the entry position when the payload omits a usable name and
+  /// URL, so every skip can still be described to the user.
+  final String label;
+
+  /// Parser message that explains why the entry was rejected.
+  final String reason;
+}
+
+/// Rejects grouped by [SourceImportSkip.reason], most frequent first.
+class SourceImportSkipGroup {
+  const SourceImportSkipGroup({required this.reason, required this.count});
+
+  final String reason;
+  final int count;
+}
+
+/// Groups [skips] by reason, most frequent first, ties in payload order.
+///
+/// A single feed can fail for a few distinct reasons (unparseable `header`,
+/// non-HTTP `bookSourceUrl`, hop-by-hop headers), so summarizing the reasons
+/// keeps the preview readable no matter how many entries were rejected.
+List<SourceImportSkipGroup> groupSourceImportSkips(
+  Iterable<SourceImportSkip> skips,
+) {
+  final counts = <String, int>{};
+  final firstSeen = <String, int>{};
+  for (final skip in skips) {
+    firstSeen.putIfAbsent(skip.reason, () => firstSeen.length);
+    counts[skip.reason] = (counts[skip.reason] ?? 0) + 1;
+  }
+  final reasons = counts.keys.toList()
+    ..sort((left, right) {
+      final byCount = counts[right]!.compareTo(counts[left]!);
+      return byCount != 0
+          ? byCount
+          : firstSeen[left]!.compareTo(firstSeen[right]!);
+    });
+  return List.unmodifiable([
+    for (final reason in reasons)
+      SourceImportSkipGroup(reason: reason, count: counts[reason]!),
+  ]);
+}
+
 /// Prepared import data. Creating a preview has no persistence side effects.
 class SourceImportPreview {
   SourceImportPreview({
     required Iterable<BookSource> sources,
     required this.provenance,
-  }) : sources = List.unmodifiable(sources);
+    Iterable<SourceImportSkip> skipped = const [],
+  }) : sources = List.unmodifiable(sources),
+       skipped = List.unmodifiable(skipped);
 
   final List<BookSource> sources;
+
+  /// Entries the parser rejected. Empty when the payload was fully representable.
+  final List<SourceImportSkip> skipped;
   final SourceImportProvenance provenance;
+
+  int get skippedCount => skipped.length;
+
+  /// Entries the payload contained, whichever branch they ended up in.
+  int get totalCount => sources.length + skipped.length;
 }
 
 /// Application-owned import metadata stored separately from third-party JSON.

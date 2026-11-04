@@ -34,5 +34,6 @@ Thumbs.db
 # Machine-local tool state and execution artifacts
 /.codegraph/
 /.taste-skill/direction.json
+/.claude/test-logs/
 /docs/task-state.json
 /fp-docs/changes/**/.fp-execute/

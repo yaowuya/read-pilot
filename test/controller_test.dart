@@ -1256,7 +1256,76 @@ void main() {
     },
   );
 
+  test('switches source for a remote book that is not on the shelf', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([_searchSource(0), _searchSource(1)]),
+    );
+    const oldSource = 'https://source-0.example';
+    const otherSource = 'https://source-1.example';
+    final searched = _remoteBook(
+      id: 'search-result',
+      sourceId: oldSource,
+      sourceLabel: 'Source 0',
+    );
+    final candidate = _remoteBook(
+      id: 'mirrored-result',
+      sourceId: otherSource,
+      sourceLabel: 'Source 1',
+    );
+    engine.results[otherSource] = [candidate];
+    engine.loadedBook = candidate;
 
+    // 还没上架的书也能先比较候选书源。
+    final found = await controller.findSourceCandidatesFor(searched);
+    expect(found.candidates.map((book) => book.id), ['mirrored-result']);
+    // 按 id 查候选仍然只认书架上的书。
+    expect(
+      (await controller.findSourceCandidates(searched.id)).candidates,
+      isEmpty,
+    );
+
+    final switched = await controller.switchBookSource(searched.id, candidate);
+    expect(switched.sourceId, otherSource);
+    expect(switched.sourceLabel, 'Source 1');
+    // 未上架的书换源只换内存里的对象，不该悄悄写进书架。
+    expect(controller.book(searched.id), isNull);
+    expect(
+      (await controller.repository.books()).where(
+        (book) => book.id == searched.id,
+      ),
+      isEmpty,
+    );
+  });
+
+  test('rejects switching a non-shelf book onto an unknown source', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(jsonEncode([_searchSource(0)]));
+
+    await expectLater(
+      () => controller.switchBookSource(
+        'missing',
+        _remoteBook(
+          id: 'orphan',
+          sourceId: 'https://not-imported.example',
+          sourceLabel: '不存在',
+        ),
+      ),
+      throwsA(
+        isA<SourceException>().having(
+          (error) => error.message,
+          'message',
+          '书源已移除。已缓存章节仍可阅读，获取新章节需重新导入书源。',
+        ),
+      ),
+    );
+  });
 
   test(
     'failed source-switch persistence never publishes replacement state',
@@ -1378,7 +1447,6 @@ void main() {
       expect(engine.chapterRequests, [candidate.chapters.first.id]);
     },
   );
-
 
   test(
     'source switch rejects a target source deleted while it loads',

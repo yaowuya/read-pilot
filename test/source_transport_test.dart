@@ -274,6 +274,67 @@ void main() {
     expect(response.text, '中文');
   });
 
+  test(
+    'falls back to GBK when the response header omits the charset',
+    () async {
+      // 中文站常见：正文是 GBK，但 Content-Type 里不带 charset，
+      // 以前会整章失败并提示「书源返回的正文不是 UTF-8」。
+      final transport = SourceTransport(
+        client: MockClient(
+          (_) async => http.Response.bytes(
+            const [0xD6, 0xD0, 0xCE, 0xC4],
+            200,
+            headers: {'content-type': 'text/html'},
+          ),
+        ),
+      );
+      addTearDown(transport.close);
+
+      final response = await transport.execute(
+        RequestPlan(
+          uri: Uri.parse('https://books.example/gbk-plain'),
+          method: 'GET',
+          headers: const {},
+        ),
+        policy: SourceNetworkPolicy(allowedOrigins: {'https://books.example'}),
+      );
+
+      expect(response.text, '中文');
+    },
+  );
+
+  test('honours a GBK charset declared only in the page meta', () async {
+    final body = <int>[
+      ...latin1.encode('<html><head><meta charset="gb2312"></head><body>'),
+      0xD6,
+      0xD0,
+      0xCE,
+      0xC4,
+      ...latin1.encode('</body></html>'),
+    ];
+    final transport = SourceTransport(
+      client: MockClient(
+        (_) async => http.Response.bytes(
+          body,
+          200,
+          headers: {'content-type': 'text/html'},
+        ),
+      ),
+    );
+    addTearDown(transport.close);
+
+    final response = await transport.execute(
+      RequestPlan(
+        uri: Uri.parse('https://books.example/gbk-meta'),
+        method: 'GET',
+        headers: const {},
+      ),
+      policy: SourceNetworkPolicy(allowedOrigins: {'https://books.example'}),
+    );
+
+    expect(response.text, contains('中文'));
+  });
+
   test('rejects an unknown response charset explicitly', () async {
     final transport = SourceTransport(
       client: MockClient(

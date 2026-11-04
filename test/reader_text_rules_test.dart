@@ -46,6 +46,17 @@ void main() {
       .map((paragraph) => paragraph.text)
       .join(' ');
 
+  // 阅读页默认沉浸式，操作顶栏/底栏前需先点正文中部唤出工具栏。
+  Future<void> showChrome(WidgetTester tester) async {
+    if (find.byKey(const Key('reader-settings')).evaluate().isNotEmpty) return;
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final body = paged.evaluate().isNotEmpty
+        ? paged
+        : find.byKey(const Key('reader-scrolling-view'));
+    await tester.tapAt(tester.getRect(body).center);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('paged reader measures the display text but keeps raw content', (
     tester,
   ) async {
@@ -84,6 +95,7 @@ void main() {
     await openReader(tester);
     expect(visibleParagraphs(tester), contains('我生'));
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-bookmark')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('note-input')), '保留原文锚点');

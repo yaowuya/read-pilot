@@ -20,6 +20,18 @@ class SourceImportService {
        _importer = importer ?? SourceImporter();
 
   static const _maxRedirects = 4;
+
+  /// Bounded retries for failures that say nothing about the URL itself.
+  ///
+  /// Some feeds sit behind origins that drop TLS handshakes intermittently: the
+  /// same request succeeds on one attempt and dies mid-handshake on the next,
+  /// so a single-shot import fails roughly half the time against such a host.
+  /// Retrying the transport hop turns that into a successful import; every
+  /// address, scheme and redirect check still runs on each attempt, and a
+  /// completed HTTP response is never retried.
+  static const _maxTransportAttempts = 8;
+  static const _transportRetryDelay = Duration(milliseconds: 80);
+
   static const _acceptedContentTypes = {
     'application/json',
     'application/octet-stream',
@@ -68,8 +80,12 @@ class SourceImportService {
     SourceImportProvenance provenance,
   ) {
     try {
+      // Aggregated feeds routinely carry a few malformed entries. Dropping only
+      // those keeps the import useful, and the preview discloses what was lost.
+      final report = _importer.parseReport(text);
       return SourceImportPreview(
-        sources: _importer.parse(text),
+        sources: report.sources,
+        skipped: report.skipped,
         provenance: provenance,
       );
     } on FormatException catch (error) {
@@ -118,13 +134,8 @@ class SourceImportService {
             '网络书源重定向到了不允许的地址。',
           );
         }
-        final request = http.AbortableRequest(
-          'GET',
-          uri,
-          abortTrigger: abort.future,
-        )..followRedirects = false;
         final response = await Future.any<http.StreamedResponse>([
-          _client.send(request),
+          _sendWithTransportRetry(uri, abort),
           abort.future.then<http.StreamedResponse>((_) {
             if (timedOut) {
               throw const SourceImportException(
@@ -253,6 +264,78 @@ class SourceImportService {
       timer.cancel();
       if (!abort.isCompleted) abort.complete();
     }
+  }
+
+  /// Sends one GET, retrying only transport-level failures.
+  ///
+  /// A retryable failure is anything that reached the network but produced no
+  /// response: a handshake that died mid-flight, a connection reset, a DNS
+  /// hiccup. An abort (timeout or caller cancellation) is never retried, and a
+  /// completed HTTP response is returned even when its status is an error,
+  /// because the caller classifies statuses itself.
+  Future<http.StreamedResponse> _sendWithTransportRetry(
+    Uri uri,
+    Completer<void> abort,
+  ) async {
+    Object? lastError;
+    StackTrace? lastStack;
+    for (var attempt = 0; attempt < _maxTransportAttempts; attempt++) {
+      if (abort.isCompleted) {
+        throw const SourceImportException(
+          SourceImportErrorKind.network,
+          '网络书源请求已中止。',
+        );
+      }
+      if (attempt > 0) {
+        final delay = _transportRetryDelay * attempt;
+        if (await _delayOrAbort(delay, abort.future)) {
+          throw const SourceImportException(
+            SourceImportErrorKind.network,
+            '网络书源请求已中止。',
+          );
+        }
+      }
+      // A request is single-use; every attempt needs its own instance.
+      final request = http.AbortableRequest(
+        'GET',
+        uri,
+        abortTrigger: abort.future,
+      )..followRedirects = false;
+      try {
+        return await _client.send(request);
+      } on http.RequestAbortedException {
+        rethrow;
+      } on UnsafeNetworkAddressException {
+        rethrow;
+      } catch (error, stack) {
+        lastError = error;
+        lastStack = stack;
+      }
+    }
+    if (lastError != null) Error.throwWithStackTrace(lastError, lastStack!);
+    throw const SourceImportException(
+      SourceImportErrorKind.network,
+      '无法连接网络书源地址。',
+    );
+  }
+
+  /// Returns true when [abort] fired before [delay] elapsed.
+  static Future<bool> _delayOrAbort(Duration delay, Future<void> abort) {
+    final done = Completer<bool>();
+    final timer = Timer(delay, () {
+      if (!done.isCompleted) done.complete(false);
+    });
+    abort.then(
+      (_) {
+        timer.cancel();
+        if (!done.isCompleted) done.complete(true);
+      },
+      onError: (_) {
+        timer.cancel();
+        if (!done.isCompleted) done.complete(true);
+      },
+    );
+    return done.future;
   }
 
   static bool _isAllowedUri(Uri uri) =>

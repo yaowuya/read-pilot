@@ -44,6 +44,17 @@ void main() {
     await database.close();
   });
 
+  // 阅读页默认沉浸式，操作顶栏/底栏前需先点正文中部唤出工具栏。
+  Future<void> showChrome(WidgetTester tester) async {
+    if (find.byKey(const Key('reader-settings')).evaluate().isNotEmpty) return;
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final body = paged.evaluate().isNotEmpty
+        ? paged
+        : find.byKey(const Key('reader-scrolling-view'));
+    await tester.tapAt(tester.getRect(body).center);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('reader records only successful chapter milestones per session', (
     tester,
   ) async {
@@ -62,6 +73,7 @@ void main() {
       ),
     ]);
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-next')));
     await tester.pumpAndSettle();
     expect(controller.calls.last, (

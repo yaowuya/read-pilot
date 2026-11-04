@@ -48,6 +48,7 @@ class _DetailsController extends AppController {
   Object? coverError;
   bool switched = false;
   bool refreshed = false;
+  bool onShelf = true;
 
   SourceCandidateSearchResult _candidateResult() => SourceCandidateSearchResult(
     candidates,
@@ -64,12 +65,27 @@ class _DetailsController extends AppController {
   );
 
   @override
-  Book? book(String id) => id == current.id ? current : null;
+  Book? book(String id) => onShelf && id == current.id ? current : null;
 
   @override
   Future<SourceCandidateSearchResult> findSourceCandidates(
     String bookId, {
     Future<void>? abortTrigger,
+  }) async {
+    if (candidateError != null) throw candidateError!;
+    return _candidateResult();
+  }
+
+  @override
+  Future<SourceCandidateSearchResult> findSourceCandidatesFor(
+    Book current, {
+    Future<void>? abortTrigger,
+    void Function(
+      SourceCandidateSearchResult partial,
+      int processed,
+      int total,
+    )?
+    onUpdate,
   }) async {
     if (candidateError != null) throw candidateError!;
     return _candidateResult();
@@ -179,6 +195,32 @@ void main() {
 
     final sheet = tester.widget<BottomSheet>(find.byType(BottomSheet));
     expect(sheet.backgroundColor, const Color(0xFFF1EDE1));
+  });
+
+  testWidgets('search results switch source before joining the shelf', (
+    tester,
+  ) async {
+    controller.onShelf = false;
+    controller.candidates = [
+      _remoteBook(
+        id: 'candidate',
+        sourceId: 'https://new.example',
+        sourceLabel: '新源',
+      ),
+    ];
+    await pumpDetails(tester);
+
+    // 还没上架的搜索结果也应该能换源，否则只能先加入书架再换。
+    expect(find.byKey(const Key('book-change-source')), findsOneWidget);
+    expect(find.text('加入书架并阅读'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('book-change-source')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('source-candidate-candidate')));
+    await tester.pumpAndSettle();
+
+    // 换源结果留在详情页上，父级持有的旧对象不会把它改回去。
+    expect(find.text('文学 · 新源'), findsOneWidget);
+    expect(find.text('加入书架并阅读'), findsOneWidget);
   });
 
   testWidgets('local books hide source actions', (tester) async {

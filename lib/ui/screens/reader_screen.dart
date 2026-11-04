@@ -20,6 +20,7 @@ import '../components/reader_marks_sheet.dart';
 import '../components/reader_preferences.dart';
 import '../components/reader_search_sheet.dart';
 import '../components/reader_toc_sheet.dart';
+import '../components/source_switch_sheet.dart';
 import '../reader/reader_paginator.dart';
 import '../reader/reader_palette.dart';
 import '../reader/reader_paragraph.dart';
@@ -83,7 +84,8 @@ class _ReaderScreenState extends State<ReaderScreen>
   String? _pageLayoutKey;
   int _visiblePage = 0;
   bool _pagedFallback = false;
-  bool _chromeVisible = true;
+  // 进入阅读页默认沉浸式：只留紧凑标题与进度，点击正文中部再唤出工具栏。
+  bool _chromeVisible = false;
   ReaderTheme? _dayTheme;
   ({int paragraphIndex, String text})? _selectedText;
   int? _scrollTapPointer;
@@ -1417,6 +1419,8 @@ class _ReaderScreenState extends State<ReaderScreen>
               top: false,
               child: Container(
                 color: background,
+                // 高度必须与工具栏显隐无关：底栏一变高就会改动正文可用高度，
+                // 触发重新分页并把读者从当前页弹走。
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
                   vertical: 6,
@@ -1426,122 +1430,179 @@ class _ReaderScreenState extends State<ReaderScreen>
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 760),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: _chromeVisible
-                            ? [
-                                Tooltip(
-                                  message: '上一章',
-                                  child: TextButton(
-                                    onPressed: _loading || _chapterIndex == 0
-                                        ? null
-                                        : () => _jump(_chapterIndex - 1),
-                                    child: compactControls
-                                        ? Icon(
-                                            Icons.skip_previous,
-                                            size: 22,
-                                            color:
-                                                _loading || _chapterIndex == 0
-                                                ? muted.withValues(alpha: .5)
-                                                : ink,
-                                          )
-                                        : Text(
-                                            '‹ 上一章',
-                                            style: TextStyle(
-                                              color:
-                                                  _loading || _chapterIndex == 0
-                                                  ? muted.withValues(alpha: .5)
-                                                  : ink,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: '章节目录',
-                                  onPressed: _showToc,
-                                  icon: Icon(
-                                    Icons.format_list_bulleted,
-                                    color: ink,
-                                    size: 22,
-                                  ),
-                                ),
-                                IconButton(
-                                  key: const Key('reader-theme-toggle'),
-                                  tooltip: dark ? '切换到日间' : '切换到夜间',
-                                  onPressed: _loading ? null : _toggleTheme,
-                                  icon: Icon(
-                                    dark
-                                        ? Icons.light_mode_outlined
-                                        : Icons.dark_mode_outlined,
-                                    color: ink,
-                                    size: 22,
-                                  ),
-                                ),
-                                IconButton(
-                                  key: const Key('reader-settings'),
-                                  tooltip: '阅读设置',
-                                  onPressed: _showSettings,
-                                  icon: Icon(
-                                    Icons.text_fields,
-                                    color: ink,
-                                    size: 24,
-                                  ),
-                                ),
-                                Tooltip(
-                                  message:
-                                      _chapterIndex + 1 < book.chapters.length
-                                      ? '下一章'
-                                      : (book.finished ? '已读完' : '标记读完'),
-                                  child: TextButton(
-                                    key: const Key('reader-next'),
-                                    onPressed: nextDisabled
-                                        ? null
-                                        : () async {
-                                            if (_chapterIndex + 1 <
-                                                book.chapters.length) {
-                                              await _jump(_chapterIndex + 1);
-                                            } else {
-                                              await _markFinished();
-                                            }
-                                          },
-                                    child: compactControls
-                                        ? Icon(
-                                            _chapterIndex + 1 <
-                                                    book.chapters.length
-                                                ? Icons.skip_next
-                                                : Icons.check_circle_outline,
-                                            size: 22,
-                                            color: nextDisabled
-                                                ? muted.withValues(alpha: .5)
-                                                : ink,
-                                          )
-                                        : Text(
-                                            _chapterIndex + 1 <
-                                                    book.chapters.length
-                                                ? '下一章 ›'
-                                                : (book.finished
-                                                      ? '已读完 ✓'
-                                                      : '标记读完'),
-                                            style: TextStyle(
-                                              color: ink,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                  ),
-                                ),
-                              ]
-                            : [
-                                const Spacer(),
-                                Text(
-                                  settings.flow == ReaderFlow.paged &&
-                                          !_pagedFallback
-                                      ? '第 ${_chapterIndex + 1} 章 · ${_visiblePage + 1}/${_pageLayout?.pages.length ?? 1} 页'
-                                      : '第 ${_chapterIndex + 1} 章 · 滚动阅读',
-                                  key: const Key('reader-reading-progress'),
-                                  style: TextStyle(fontSize: 12, color: muted),
-                                ),
-                              ],
+                      child: LayoutBuilder(
+                        builder: (context, barConstraints) {
+                          // 按底栏的真实可用宽度决定按钮形态，而不是只看屏宽：
+                          // 文字按钮（上一章/下一章）各占 84pt，加上换源等四个
+                          // 图标在 360pt 级别的宽度上会横向溢出。
+                          final barCompact =
+                              compactControls || barConstraints.maxWidth < 420;
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: _chromeVisible
+                                ? [
+                                    Tooltip(
+                                      message: '上一章',
+                                      child: TextButton(
+                                        onPressed:
+                                            _loading || _chapterIndex == 0
+                                            ? null
+                                            : () => _jump(_chapterIndex - 1),
+                                        child: barCompact
+                                            ? Icon(
+                                                Icons.skip_previous,
+                                                size: 22,
+                                                color:
+                                                    _loading ||
+                                                        _chapterIndex == 0
+                                                    ? muted.withValues(
+                                                        alpha: .5,
+                                                      )
+                                                    : ink,
+                                              )
+                                            : Text(
+                                                '‹ 上一章',
+                                                style: TextStyle(
+                                                  color:
+                                                      _loading ||
+                                                          _chapterIndex == 0
+                                                      ? muted.withValues(
+                                                          alpha: .5,
+                                                        )
+                                                      : ink,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      tooltip: '章节目录',
+                                      visualDensity: barCompact
+                                          ? VisualDensity.compact
+                                          : null,
+                                      padding: barCompact
+                                          ? EdgeInsets.zero
+                                          : null,
+                                      onPressed: _showToc,
+                                      icon: Icon(
+                                        Icons.format_list_bulleted,
+                                        color: ink,
+                                        size: 22,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      key: const Key('reader-change-source'),
+                                      tooltip: '换源',
+                                      visualDensity: barCompact
+                                          ? VisualDensity.compact
+                                          : null,
+                                      padding: barCompact
+                                          ? EdgeInsets.zero
+                                          : null,
+                                      onPressed: _loading || !book.isRemote
+                                          ? null
+                                          : _changeSource,
+                                      icon: Icon(
+                                        Icons.swap_horiz,
+                                        color: _loading || !book.isRemote
+                                            ? muted.withValues(alpha: .5)
+                                            : ink,
+                                        size: 22,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      key: const Key('reader-theme-toggle'),
+                                      tooltip: dark ? '切换到日间' : '切换到夜间',
+                                      visualDensity: barCompact
+                                          ? VisualDensity.compact
+                                          : null,
+                                      padding: barCompact
+                                          ? EdgeInsets.zero
+                                          : null,
+                                      onPressed: _loading ? null : _toggleTheme,
+                                      icon: Icon(
+                                        dark
+                                            ? Icons.light_mode_outlined
+                                            : Icons.dark_mode_outlined,
+                                        color: ink,
+                                        size: 22,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      key: const Key('reader-settings'),
+                                      tooltip: '阅读设置',
+                                      onPressed: _showSettings,
+                                      icon: Icon(
+                                        Icons.text_fields,
+                                        color: ink,
+                                        size: 24,
+                                      ),
+                                    ),
+                                    Tooltip(
+                                      message:
+                                          _chapterIndex + 1 <
+                                              book.chapters.length
+                                          ? '下一章'
+                                          : (book.finished ? '已读完' : '标记读完'),
+                                      child: TextButton(
+                                        key: const Key('reader-next'),
+                                        onPressed: nextDisabled
+                                            ? null
+                                            : () async {
+                                                if (_chapterIndex + 1 <
+                                                    book.chapters.length) {
+                                                  await _jump(
+                                                    _chapterIndex + 1,
+                                                  );
+                                                } else {
+                                                  await _markFinished();
+                                                }
+                                              },
+                                        child: barCompact
+                                            ? Icon(
+                                                _chapterIndex + 1 <
+                                                        book.chapters.length
+                                                    ? Icons.skip_next
+                                                    : Icons
+                                                          .check_circle_outline,
+                                                size: 22,
+                                                color: nextDisabled
+                                                    ? muted.withValues(
+                                                        alpha: .5,
+                                                      )
+                                                    : ink,
+                                              )
+                                            : Text(
+                                                _chapterIndex + 1 <
+                                                        book.chapters.length
+                                                    ? '下一章 ›'
+                                                    : (book.finished
+                                                          ? '已读完 ✓'
+                                                          : '标记读完'),
+                                                style: TextStyle(
+                                                  color: ink,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                      ),
+                                    ),
+                                  ]
+                                : [
+                                    const Spacer(),
+                                    Text(
+                                      settings.flow == ReaderFlow.paged &&
+                                              !_pagedFallback
+                                          ? '第 ${_chapterIndex + 1} 章 · ${_visiblePage + 1}/${_pageLayout?.pages.length ?? 1} 页'
+                                          : '第 ${_chapterIndex + 1} 章 · 滚动阅读',
+                                      key: const Key('reader-reading-progress'),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: muted,
+                                      ),
+                                    ),
+                                  ],
+                          );
+                        },
                       ),
                     ),
                   ),
@@ -1586,6 +1647,21 @@ class _ReaderScreenState extends State<ReaderScreen>
       return;
     }
     await _jump(hit.chapterIndex, hit.paragraphIndex);
+  }
+
+  /// 阅读中直接换源：换完由 [_scheduleBindingReload] 按当前位置自动重载。
+  Future<void> _changeSource() async {
+    final switched = await showModalBottomSheet<Book>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: const Color(0xFFF1EDE1),
+      constraints: const BoxConstraints(maxWidth: 600),
+      builder: (_) => SourceSwitchSheet(controller: controller, book: book),
+    );
+    if (switched != null && mounted) {
+      showMessage(context, '已切换到 ${switched.sourceLabel}。');
+    }
   }
 
   void _showToc() => showModalBottomSheet<void>(

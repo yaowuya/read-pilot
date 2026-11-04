@@ -101,6 +101,21 @@ abstract final class ReaderPaginator {
 
     void finishPage() {
       if (fragments.isEmpty && !showsHeader) return;
+      // 页底不留段间距：段落间距只在同一页内的两段之间才有意义，
+      // 留在页尾会变成正文与页脚之间的空白，让每页正文下沿忽高忽低。
+      if (fragments.isNotEmpty) {
+        final last = fragments.last;
+        if (last.trailingSpacing != 0) {
+          fragments[fragments.length - 1] = ReaderPageFragment(
+            paragraphIndex: last.paragraphIndex,
+            text: last.text,
+            isContinuation: last.isContinuation,
+            endsParagraph: last.endsParagraph,
+            trailingSpacing: 0,
+          );
+          usedHeight -= last.trailingSpacing;
+        }
+      }
       pages.add(
         ReaderPage(
           fragments: fragments,

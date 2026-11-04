@@ -44,6 +44,17 @@ void main() {
     await database.close();
   });
 
+  // 阅读页默认沉浸式，操作顶栏/底栏前需先点正文中部唤出工具栏。
+  Future<void> showChrome(WidgetTester tester) async {
+    if (find.byKey(const Key('reader-settings')).evaluate().isNotEmpty) return;
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final body = paged.evaluate().isNotEmpty
+        ? paged
+        : find.byKey(const Key('reader-scrolling-view'));
+    await tester.tapAt(tester.getRect(body).center);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('reader starts and stops explicit device read aloud', (
     tester,
   ) async {
@@ -65,6 +76,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-read-aloud')));
@@ -74,6 +86,7 @@ void main() {
     await engine.started.future;
     expect(readAloud.state, ReadAloudState.speaking);
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-read-aloud')));
@@ -107,6 +120,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-read-aloud')));

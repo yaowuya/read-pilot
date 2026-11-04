@@ -24,6 +24,17 @@ void main() {
     await database.close();
   });
 
+  // 阅读页默认沉浸式，操作顶栏/底栏前需先点正文中部唤出工具栏。
+  Future<void> showChrome(WidgetTester tester) async {
+    if (find.byKey(const Key('reader-settings')).evaluate().isNotEmpty) return;
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final body = paged.evaluate().isNotEmpty
+        ? paged
+        : find.byKey(const Key('reader-scrolling-view'));
+    await tester.tapAt(tester.getRect(body).center);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('bookshelf is usable on a narrow phone', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -51,6 +62,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('book-public-fusheng')));
     await tester.pumpAndSettle();
+    await showChrome(tester);
     expect(find.byKey(const Key('reader-settings')), findsOneWidget);
     await tester.tap(find.byKey(const Key('reader-next')));
     await tester.pumpAndSettle();
@@ -72,6 +84,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('book-public-fusheng')));
     await tester.pumpAndSettle();
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-bookmark')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('note-input')), '这一段值得再读。');
@@ -86,8 +99,18 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('开始阅读  →'));
     await tester.pumpAndSettle();
+    // 沉浸态仍保留紧凑页头，正文标题不能被它遮住。
+    final body =
+        find.byKey(const Key('reader-paged-view')).evaluate().isNotEmpty
+        ? find.byKey(const Key('reader-paged-view'))
+        : find.byKey(const Key('reader-scrolling-view'));
+    final bodyHeading = find.descendant(
+      of: body,
+      matching: find.text('卷一 · 闺房记乐'),
+    );
+    expect(bodyHeading, findsOneWidget);
     expect(
-      tester.getTopLeft(find.text('卷一 · 闺房记乐')).dy,
+      tester.getTopLeft(bodyHeading).dy,
       greaterThanOrEqualTo(kToolbarHeight),
     );
     expect(controller.book('public-fusheng')!.position.paragraphIndex, 0);
@@ -100,6 +123,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('开始阅读  →'));
     await tester.pumpAndSettle();
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('夜间'));
@@ -118,6 +142,10 @@ void main() {
     );
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
+    // 阅读页默认沉浸式：冷启动直接进正文，不显示顶栏。
+    expect(find.byKey(const Key('reader-compact-heading')), findsOneWidget);
+    expect(find.byKey(const Key('reader-back')), findsNothing);
+    await showChrome(tester);
     expect(find.byKey(const Key('reader-back')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

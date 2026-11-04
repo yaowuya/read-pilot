@@ -66,8 +66,14 @@ class AppController extends ChangeNotifier {
   List<BookSource> get sources => List.unmodifiable(_sources);
   List<SourceExploreCategory> get exploreCategories {
     final categories = <SourceExploreCategory>[];
+    final seenIds = <String>{};
     for (final source in _sources.where((source) => source.enabled)) {
       for (final entry in source.exploreEntries) {
+        // The discover page keys each category chip by [SourceExploreCategory.id];
+        // duplicate ids would crash its Wrap with "Duplicate keys found".
+        if (!seenIds.add('${source.id}::${entry.title}::${entry.url}')) {
+          continue;
+        }
         categories.add(SourceExploreCategory(source, entry));
         if (categories.length == 500) return List.unmodifiable(categories);
       }
@@ -1179,12 +1185,23 @@ class AppController extends ChangeNotifier {
 
   /// Rebinds one shelf book only after target content and persistence succeed.
   /// Rejects a destination change during loading so callers can retry explicitly.
+  ///
+  /// 不在书架的书（例如还没加入书架、只在发现页看到的搜索结果）换源只做内存
+  /// 替换：加载目标书源的书目后直接返回，不写数据库，也没有书签与进度需要迁移，
+  /// 与 Legado 对未上架书籍的处理一致。
   Future<Book> switchBookSource(String bookId, Book candidate) async {
     final current = book(bookId);
-    if (current == null || !current.isRemote) {
+    if (candidate.sourceId == null) {
+      throw const SourceException('请选择其他可用书源。');
+    }
+    if (current == null) {
+      final source = _source(candidate.sourceId!);
+      return engine.loadBook(source, candidate);
+    }
+    if (!current.isRemote) {
       throw const SourceException('只有书架中的网络书籍可以换源。');
     }
-    if (candidate.sourceId == null || candidate.sourceId == current.sourceId) {
+    if (candidate.sourceId == current.sourceId) {
       throw const SourceException('请选择其他可用书源。');
     }
     final source = _source(candidate.sourceId!);

@@ -55,7 +55,9 @@ class SourceEngine {
   /// 而不是让整本书因为目录翻不完而无法加入书架。
   static const _maxStalledTocPages = 10;
 
-  static const _maxContentPages = 10;
+  /// 正文分页上限。Legado 只靠 URL 去重做保护，真实书源里一章被拆成十几页很常见，
+  /// 所以这里给一个宽松的安全上限：到达上限就带着已取到的正文停下，而不是整章报错。
+  static const _maxContentPages = 50;
 
   final RequestPlanner _planner;
   final RuleInterpreter _interpreter;
@@ -361,7 +363,16 @@ class SourceEngine {
       throw const SourceException('replaceRegex 必须使用安全的“正则##替换文本”格式。');
     }
     final nextRule = rules['nextContentUrl'];
-    final isHtml = contentRule.toLowerCase().endsWith('@html');
+    // 只看选择器部分是否以 @html 结尾：规则常常写成
+    // `.TxtContent@html##<script.*?</script>|…`，整串去比对会漏判，
+    // 把 HTML 标签当成正文塞进阅读器。Legado 则无条件走 HtmlFormatter，
+    // 这里在 @html 之外再兜一层「像标签就按 HTML 处理」。
+    final selectorPart = contentRule.contains('##')
+        ? contentRule.substring(0, contentRule.indexOf('##'))
+        : contentRule;
+    final isHtml =
+        selectorPart.toLowerCase().trimRight().endsWith('@html') ||
+        RegExp(r'</?[a-zA-Z][^>]*>').hasMatch(contentRule);
     final paragraphs = <String>[];
     final visited = <String>{};
     var nextUrl = chapter.url!;
@@ -370,9 +381,9 @@ class SourceEngine {
     for (var page = 0; ; page++) {
       await _throwIfCancelled(abortTrigger);
       if (!visited.add(nextUrl)) break;
-      if (page >= _maxContentPages) {
-        throw const SourceException('正文分页超过 $_maxContentPages 页，已停止读取。');
-      }
+      // 达到安全上限时保留已经取到的正文停下，而不是丢掉整章。真实书源里一章
+      // 被拆成十几二十页很常见，Legado 本身也只靠 URL 去重来防止死循环。
+      if (page >= _maxContentPages) break;
       final response = await _fetch(
         source,
         nextUrl,

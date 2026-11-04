@@ -439,24 +439,28 @@ class RuleInterpreter {
         legacyText.text,
       ).map(RuleNode.html).toList();
     }
-    final (selector, _) = _cssParts(rule, forSelection: true);
-    final elements = selector.isEmpty
-        ? [root]
-        : root.querySelectorAll(selector);
+    final (selector, _, legacySteps) = _cssParts(rule, forSelection: true);
+    final elements = legacySteps != null
+        ? _selectLegacyChain(root, legacySteps)
+        : selector.isEmpty
+        ? <dom.Element>[root]
+        : _querySelectorAllSafe(root, selector);
     return elements.map(RuleNode.html).toList();
   }
 
   String _extractCss(RuleNode input, String rule, {bool firstOnly = false}) {
     final root = _html(input);
     final legacyText = _legacyTextQuery(rule);
-    final (selector, accessor) = legacyText == null
+    final (selector, accessor, legacySteps) = legacyText == null
         ? _cssParts(rule)
-        : ('', legacyText.accessor);
-    final elements = legacyText == null
-        ? selector.isEmpty
-              ? [root]
-              : root.querySelectorAll(selector)
-        : _legacyTextElements(root, legacyText.text);
+        : ('', legacyText.accessor, null);
+    final elements = legacyText != null
+        ? _legacyTextElements(root, legacyText.text)
+        : legacySteps != null
+        ? _selectLegacyChain(root, legacySteps)
+        : selector.isEmpty
+        ? <dom.Element>[root]
+        : _querySelectorAllSafe(root, selector);
     final output = StringBuffer();
     for (final element in firstOnly ? elements.take(1) : elements) {
       final value = _elementValue(element, accessor);
@@ -614,13 +618,118 @@ class RuleInterpreter {
       if (_elementValue(element, 'text') == expected) element,
   ];
 
+  /// Trailing positional suffix of the legacy rule grammar (`tag.a.0`).
+  ///
+  /// A valid CSS selector never ends with `.<digits>` because identifiers may
+  /// not start with a number, so the suffix is unambiguous. Negative indexes
+  /// count from the end, as in Legado.
+  static final RegExp _trailingIndex = RegExp(r'\.(-?\d+)$');
+
+  /// Queries [root] with [selector], honouring legacy positional suffixes.
+  ///
+  /// Real-world sources write `span.0` (or `class.book.2`) to mean "the N-th
+  /// match", which CSS cannot express. Those suffixes are stripped and applied
+  /// as 0-based indexes over the matches, mirroring Legado's `indexDefault`
+  /// (negative indexes count from the end). A part that fails to parse yields
+  /// nothing instead of aborting the whole rule, so a following `||` branch can
+  /// still supply a value.
+  List<dom.Element> _querySelectorAllSafe(dom.Element root, String selector) {
+    final parts = <(String, List<int>)>[];
+    var hasIndexSuffix = false;
+    for (final rawPart in _tokenizer.splitTopLevel(selector, ',')) {
+      final part = rawPart.trim();
+      if (part.isEmpty) continue;
+      final (base, indexes) = _splitIndexes(part);
+      if (indexes.isNotEmpty) hasIndexSuffix = true;
+      parts.add((base, indexes));
+    }
+    if (!hasIndexSuffix) {
+      return _querySelectorAll(root, selector);
+    }
+    final selected = LinkedHashSet<dom.Element>.identity();
+    for (final (base, indexes) in parts) {
+      selected.addAll(_applyIndexes(_querySelectorAll(root, base), indexes));
+    }
+    return List.unmodifiable(selected);
+  }
+
+  /// Resolves a legacy rule chain step by step, so each `@` segment can carry
+  /// its own positional suffix (`class.book.1@tag.a`).
+  List<dom.Element> _selectLegacyChain(dom.Element root, List<String> steps) {
+    var current = <dom.Element>[root];
+    for (final step in steps) {
+      if (current.isEmpty) return const <dom.Element>[];
+      final (base, indexes) = _splitIndexes(_legacySelector(step));
+      final matches = LinkedHashSet<dom.Element>.identity();
+      for (final element in current) {
+        if (base.isEmpty) {
+          matches.add(element);
+          continue;
+        }
+        matches.addAll(_querySelectorAll(element, base));
+      }
+      current = _applyIndexes(matches.toList(), indexes);
+    }
+    return List.unmodifiable(current);
+  }
+
+  /// Splits a compound selector into its base and trailing positional indexes.
+  static (String, List<int>) _splitIndexes(String selector) {
+    var base = selector.trim();
+    final indexes = <int>[];
+    while (true) {
+      final match = _trailingIndex.firstMatch(base);
+      if (match == null) break;
+      indexes.insert(0, int.parse(match.group(1)!));
+      base = base.substring(0, match.start).trim();
+    }
+    return (base, indexes);
+  }
+
+  /// Picks the requested positions (0-based, negative from the end) in order.
+  static List<dom.Element> _applyIndexes(
+    List<dom.Element> matches,
+    List<int> indexes,
+  ) {
+    if (indexes.isEmpty) return matches;
+    final picked = <dom.Element>[];
+    for (final index in indexes) {
+      final resolved = index < 0 ? matches.length + index : index;
+      if (resolved >= 0 && resolved < matches.length) {
+        picked.add(matches[resolved]);
+      }
+    }
+    return picked;
+  }
+
+  /// Runs a single CSS selector, turning parse failures into no matches.
+  ///
+  /// Sources in the wild contain selectors that no CSS engine accepts; the
+  /// fallback branch machinery in [select]/[extract] handles an empty result,
+  /// so containment here keeps such rules working instead of surfacing an
+  /// English parser error to the reader.
+  static List<dom.Element> _querySelectorAll(
+    dom.Element root,
+    String selector,
+  ) {
+    if (selector.isEmpty) return <dom.Element>[root];
+    try {
+      return root.querySelectorAll(selector);
+    } on FormatException {
+      return const <dom.Element>[];
+    }
+  }
+
   static bool _isBareAccessor(String rule) => RegExp(
     r'^(?:text|ownText|textNodes|html|href|src|data-[\w-]+|aria-[\w-]+)$',
   ).hasMatch(rule);
 
-  static (String, String) _cssParts(String rule, {bool forSelection = false}) {
+  static (String, String, List<String>?) _cssParts(
+    String rule, {
+    bool forSelection = false,
+  }) {
     final trimmed = rule.trim();
-    if (!forSelection && _isBareAccessor(trimmed)) return ('', trimmed);
+    if (!forSelection && _isBareAccessor(trimmed)) return ('', trimmed, null);
     final explicitCss = RegExp(r'^@css:', caseSensitive: false).hasMatch(rule);
     if (!explicitCss) {
       final parts = rule.split('@');
@@ -631,15 +740,14 @@ class RuleInterpreter {
             lower.startsWith('tag.');
       });
       if (legacy) {
-        final selectorParts = [...parts];
+        final selectorParts = [
+          for (final part in parts)
+            if (part.trim().isNotEmpty) part.trim(),
+        ];
         final accessor = forSelection || selectorParts.length == 1
             ? 'text'
             : selectorParts.removeLast();
-        final selector = selectorParts
-            .where((part) => part.trim().isNotEmpty)
-            .map(_legacySelector)
-            .join(' ');
-        return (selector, accessor.trim());
+        return ('', accessor.trim(), selectorParts);
       }
     }
 
@@ -647,11 +755,11 @@ class RuleInterpreter {
       RegExp(r'^@css:', caseSensitive: false),
       '',
     );
-    if (forSelection) return (selector.trim(), 'text');
+    if (forSelection) return (selector.trim(), 'text', null);
     final index = selector.lastIndexOf('@');
     final accessor = index < 0 ? 'text' : selector.substring(index + 1);
     if (index >= 0) selector = selector.substring(0, index);
-    return (selector.trim(), accessor.trim());
+    return (selector.trim(), accessor.trim(), null);
   }
 
   static String _legacySelector(String raw) {

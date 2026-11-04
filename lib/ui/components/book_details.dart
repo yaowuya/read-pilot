@@ -29,6 +29,12 @@ class BookDetails extends StatefulWidget {
 class _BookDetailsState extends State<BookDetails> {
   String? _busyAction;
   String? _error;
+  Book? _replacement;
+
+  /// 未加入书架的书换源后只存在于内存里，父级仍持有旧对象，因此这里自己记住
+  /// 换源结果，否则抽屉关掉后又显示回旧书源。
+  Book _resolveBook(Book? shelfBook) =>
+      shelfBook ?? _replacement ?? widget.book;
 
   Future<void> _refreshCover(Book book) async {
     if (_busyAction != null) return;
@@ -58,7 +64,10 @@ class _BookDetailsState extends State<BookDetails> {
           SourceSwitchSheet(controller: widget.controller, book: book),
     );
     if (mounted && switched != null) {
-      setState(() => _error = null);
+      setState(() {
+        _error = null;
+        _replacement = switched;
+      });
       showMessage(context, '已切换到 ${switched.sourceLabel}。');
     }
   }
@@ -126,8 +135,7 @@ class _BookDetailsState extends State<BookDetails> {
     animation: widget.controller,
     builder: (context, _) {
       final shelfBook = widget.controller.book(widget.book.id);
-      final book = shelfBook ?? widget.book;
-      final sourceActions = shelfBook != null && book.isRemote;
+      final book = _resolveBook(shelfBook);
       return SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(28, 6, 28, 32),
         child: Column(
@@ -170,7 +178,9 @@ class _BookDetailsState extends State<BookDetails> {
                 ),
               ],
             ),
-            if (sourceActions) ...[
+            // 换源对网络书一律可用：还没加入书架的搜索结果也能先换源再决定是否上架。
+            // 其余动作（刷新封面、缓存、管理缓存）都按书籍 id 走书架，未上架时仍隐藏。
+            if (book.isRemote) ...[
               const SizedBox(height: 18),
               Wrap(
                 spacing: 10,
@@ -184,40 +194,42 @@ class _BookDetailsState extends State<BookDetails> {
                     icon: const Icon(Icons.swap_horiz, size: 18),
                     label: const Text('换源'),
                   ),
-                  OutlinedButton.icon(
-                    key: const Key('book-refresh-cover'),
-                    onPressed: _busyAction == null
-                        ? () => _refreshCover(book)
-                        : null,
-                    icon: _busyAction == 'cover'
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.image_search_outlined, size: 18),
-                    label: const Text('刷新封面'),
-                  ),
-                  if (book.chapters.isNotEmpty)
+                  if (shelfBook != null) ...[
                     OutlinedButton.icon(
-                      key: const Key('book-cache-chapters'),
+                      key: const Key('book-refresh-cover'),
                       onPressed: _busyAction == null
-                          ? () => _cacheChapters(book)
+                          ? () => _refreshCover(book)
                           : null,
-                      icon: const Icon(
-                        Icons.download_for_offline_outlined,
-                        size: 18,
+                      icon: _busyAction == 'cover'
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.image_search_outlined, size: 18),
+                      label: const Text('刷新封面'),
+                    ),
+                    if (book.chapters.isNotEmpty)
+                      OutlinedButton.icon(
+                        key: const Key('book-cache-chapters'),
+                        onPressed: _busyAction == null
+                            ? () => _cacheChapters(book)
+                            : null,
+                        icon: const Icon(
+                          Icons.download_for_offline_outlined,
+                          size: 18,
+                        ),
+                        label: const Text('缓存章节'),
                       ),
-                      label: const Text('缓存章节'),
-                    ),
-                  if (book.cachedChapters > 0)
-                    OutlinedButton.icon(
-                      key: const Key('book-manage-cache'),
-                      onPressed: _busyAction == null
-                          ? () => _manageCache(book)
-                          : null,
-                      icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                      label: const Text('管理缓存'),
-                    ),
+                    if (book.cachedChapters > 0)
+                      OutlinedButton.icon(
+                        key: const Key('book-manage-cache'),
+                        onPressed: _busyAction == null
+                            ? () => _manageCache(book)
+                            : null,
+                        icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                        label: const Text('管理缓存'),
+                      ),
+                  ],
                 ],
               ),
             ],
