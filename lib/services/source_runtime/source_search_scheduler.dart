@@ -1,8 +1,15 @@
 import 'dart:async';
 
 /// Runs independent source operations while preserving input order.
+///
+/// Source searches are network-bound: each one spends nearly all of its time
+/// waiting on a different host, so several can be in flight at once without
+/// competing for CPU. The bound is what keeps a thousand-source search from
+/// opening a thousand sockets at the same time; sixteen is the working set
+/// Legado uses for 换源 (`DownloadCacheSettings.threadCount`), so a phone's
+/// radio stays busy without starving a single slow host.
 class SourceSearchScheduler {
-  const SourceSearchScheduler({this.maxConcurrent = 4})
+  const SourceSearchScheduler({this.maxConcurrent = 16})
     : assert(maxConcurrent > 0);
 
   final int maxConcurrent;

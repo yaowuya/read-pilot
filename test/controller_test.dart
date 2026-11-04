@@ -390,22 +390,25 @@ void main() {
     expect((await controller.repository.sources()).single.name, '网络导入源');
   });
 
-  test('multi-source search runs at most four sources concurrently', () async {
-    controller.dispose();
-    final engine = _ConcurrencySourceEngine();
-    controller = AppController(AppRepository(database), engine);
-    await controller.initialize();
-    await controller.importSources(
-      jsonEncode([
-        for (var index = 0; index < 7; index++) _searchSource(index),
-      ]),
-    );
+  test(
+    'multi-source search runs at most sixteen sources concurrently',
+    () async {
+      controller.dispose();
+      final engine = _ConcurrencySourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([
+          for (var index = 0; index < 19; index++) _searchSource(index),
+        ]),
+      );
 
-    final groups = await controller.searchSources('测试');
+      final groups = await controller.searchSources('测试');
 
-    expect(groups, hasLength(7));
-    expect(engine.peak, 4);
-  });
+      expect(groups, hasLength(19));
+      expect(engine.peak, 16);
+    },
+  );
 
   test('cancelling search prevents queued sources from starting', () async {
     controller.dispose();
@@ -414,7 +417,7 @@ void main() {
     await controller.initialize();
     await controller.importSources(
       jsonEncode([
-        for (var index = 0; index < 20; index++) _searchSource(index),
+        for (var index = 0; index < 40; index++) _searchSource(index),
       ]),
     );
     final abort = Completer<void>();
@@ -424,8 +427,8 @@ void main() {
     abort.complete();
     final groups = await pending;
 
-    expect(engine.started, 4);
-    expect(groups, hasLength(4));
+    expect(engine.started, 16);
+    expect(groups, hasLength(16));
   });
 
   test(
@@ -547,7 +550,7 @@ void main() {
   );
 
   test(
-    'streams a candidate only after its chapter and word count are ready',
+    'streams a candidate before its chapter and word count are ready',
     () async {
       controller.dispose();
       final engine = _SwitchSourceEngine();
@@ -599,14 +602,22 @@ void main() {
         const Duration(seconds: 1),
       );
       try {
-        // A visible candidate is actionable, so it must not arrive before the
-        // mapped chapter and word count are available.
-        expect(partial.infoFor(candidate)?.mappedChapterTitle, '第一章');
-        expect(partial.infoFor(candidate)?.wordCount, 4);
+        // A source returning this title is enough to list a switchable row: the
+        // mapped chapter and word count are decoration that arrives later, so
+        // they must never gate the list while a long search is still running.
+        expect(
+          partial.candidates.map((book) => book.id),
+          contains(candidate.id),
+        );
+        expect(partial.infoFor(candidate), isNull);
       } finally {
         if (!delayedSearch.isCompleted) delayedSearch.complete(const []);
-        await search;
       }
+
+      final found = await search;
+
+      expect(found.infoFor(candidate)?.mappedChapterTitle, '第一章');
+      expect(found.infoFor(candidate)?.wordCount, 4);
     },
   );
 
@@ -744,12 +755,12 @@ void main() {
 
     final finding = controller.findSourceCandidatesFor(current);
     await engine.metadataStarted.future;
-    // 12 admitted metadata jobs plus four scheduler workers blocked on the
-    // next admission, and the ignored current source: no unbounded 40-source
-    // search can run ahead while the first three catalog loads are paused.
+    // Catalog loads are the heaviest request a switch issues, so they stay
+    // capped and their backlog bounded: however many sources answer at once,
+    // only the admitted jobs may run while the gate is closed.
     await Future<void>.delayed(Duration.zero);
-    expect(engine.metadataLoads, 3);
-    expect(engine.searchStarted, lessThanOrEqualTo(17));
+    expect(engine.metadataLoads, lessThanOrEqualTo(24));
+    expect(engine.searchStarted, lessThanOrEqualTo(40));
 
     gate.complete();
     final found = await finding;
@@ -1115,7 +1126,10 @@ void main() {
     final incomplete = await controller.reloadSourceCandidatesFor(current);
     expect(incomplete.hasCompleteCandidateResults, isFalse);
     expect(incomplete.unavailableCandidateSourceIds, contains(candidateSource));
-    expect(incomplete.candidates, isEmpty);
+    // A metadata failure costs the row its chapter and word count, not the row:
+    // the source still returned this title, so it stays a switchable target.
+    expect(incomplete.candidates.map((book) => book.id), [candidate.id]);
+    expect(incomplete.infoFor(candidate), isNull);
 
     // Read the raw snapshot: the display accessor deliberately filters some
     // entries, whereas this verifies a metadata failure cannot overwrite it.

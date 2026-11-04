@@ -149,12 +149,14 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
   List<Book> get _visibleCandidates {
     final query = _filter.text.trim().toLowerCase();
     final result = _result;
+    // A row is listed as soon as a source returned this title: the mapped
+    // chapter and word count are extra detail that streams in afterwards, so
+    // they must never gate the list itself.
     final ranked = (result?.candidates ?? const <Book>[]).indexed
         .where(
           (entry) =>
-              (result?.infoFor(entry.$2)?.isReadyForDisplay ?? false) &&
-              (entry.$2.sourceLabel.toLowerCase().contains(query) ||
-                  entry.$2.author.toLowerCase().contains(query)),
+              entry.$2.sourceLabel.toLowerCase().contains(query) ||
+              entry.$2.author.toLowerCase().contains(query),
         )
         .toList();
     if (_sortBySource) {
@@ -215,6 +217,8 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
         .length;
     final filtering = _filter.text.trim().isNotEmpty;
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    // 换源是半屏操作：上方留出正文，用户能一边看当前页一边挑书源。
+    final height = (MediaQuery.sizeOf(context).height - keyboard) * .66;
     return ColoredBox(
       color: _paper,
       child: SafeArea(
@@ -222,7 +226,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
         child: Padding(
           padding: EdgeInsets.only(bottom: keyboard),
           child: SizedBox(
-            height: (MediaQuery.sizeOf(context).height - keyboard) * .9,
+            height: height,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

@@ -227,15 +227,17 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('source sheet fills the phone below a small top margin', (
+  testWidgets('source sheet covers about two thirds of the phone', (
     tester,
   ) async {
     await openSheet(tester);
     await tester.pumpAndSettle();
 
     final sheet = tester.getRect(find.byType(SourceSwitchSheet));
-    expect(sheet.height, greaterThanOrEqualTo(812 * .85));
-    expect(sheet.top, lessThan(812 * .15));
+    // 换源是半屏操作：上方留出正文，用户能一边看当前页一边挑书源。
+    expect(sheet.height, lessThanOrEqualTo(812 * .7));
+    expect(sheet.height, greaterThanOrEqualTo(812 * .6));
+    expect(sheet.top, greaterThan(812 * .3));
     expect(tester.takeException(), isNull);
   });
 
@@ -442,7 +444,8 @@ void main() {
       // 用户报告：换源成功后再次点开换源，应当直接列出上次加载好的源，
       // 只有点刷新按钮才重新扫描全部书源。
       controller.persistReloads = true;
-      await openSheet(tester);
+      // 换源面板只占约 2/3 屏，用高一点的视口让候选行都落在可见区域。
+      await openSheet(tester, size: const Size(375, 1200));
       await tester.pumpAndSettle();
       expect(controller.reloads, 1);
       expect(controller.searches, 1);
@@ -515,7 +518,7 @@ void main() {
   testWidgets(
     'source-name sort is stable and relevance restores controller order',
     (tester) async {
-      await openSheet(tester, size: const Size(800, 1000));
+      await openSheet(tester, size: const Size(800, 2000));
       await tester.pumpAndSettle();
       final first = find.byKey(const Key('source-candidate-z-first'));
       final second = find.byKey(const Key('source-candidate-a-second'));
@@ -648,21 +651,21 @@ void main() {
     },
   );
 
-  testWidgets('shows a streamed candidate only after its metadata is ready', (
+  testWidgets('lists a streamed candidate before its metadata arrives', (
     tester,
   ) async {
-    // A source hit alone is not selectable: chapter mapping and word count
-    // must arrive in the same update as its card.
+    // A source returning this title is already a switchable target: chapter
+    // mapping and word count are decoration, so they stream in afterwards and
+    // must never keep the row off screen.
     controller
       ..streamedCandidates = true
       ..streamGate = Completer<void>();
     await openSheet(tester);
     await tester.pump();
 
-    expect(find.byKey(const Key('source-switch-loading')), findsOneWidget);
-    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
-    expect(find.text('章节：正在加载信息…'), findsNothing);
-    expect(find.text('字数：正在加载…'), findsNothing);
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+    expect(find.text('章节：正在加载信息…'), findsOneWidget);
+    expect(find.text('字数：正在加载…'), findsOneWidget);
     expect(find.textContaining('正在查找其他同名书源'), findsOneWidget);
 
     controller.streamGate!.complete();
@@ -688,7 +691,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('reports pending metadata after source discovery completes', (
+  testWidgets('reports pending metadata while listing found candidates', (
     tester,
   ) async {
     controller
@@ -700,12 +703,21 @@ void main() {
     await openSheet(tester);
     await tester.pump();
 
-    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+    // The found source is listed immediately; only its summary is pending.
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
     expect(find.text('正在加载候选章节与字数…（剩余 3）'), findsOneWidget);
 
     controller.streamGate!.complete();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('source-candidate-word-count-z-first')),
+          )
+          .data,
+      '字数：4',
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -717,7 +729,7 @@ void main() {
         ..streamGate = Completer<void>();
       await openSheet(tester);
       await tester.pump();
-      expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+      expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
 
       Navigator.of(tester.element(find.byType(SourceSwitchSheet))).pop();
       await tester.pumpAndSettle();

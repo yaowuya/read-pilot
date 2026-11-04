@@ -40,11 +40,11 @@ class AppController extends ChangeNotifier {
   final SourceEngine engine;
   final SourceImportService sourceImportService;
   final SourceSearchScheduler _sourceSearchScheduler;
-  static const _sourceCandidateMetadataConcurrency = 3;
-  // Backpressure keeps a noisy search result from queuing an unbounded number
-  // of full catalog/content loads while preserving early ready candidates.
-  static const _sourceCandidateMetadataBacklogLimit =
-      _sourceCandidateMetadataConcurrency * 4;
+  // Catalog + first-chapter reads decorate an already-visible row, so several
+  // can run together. They no longer block the search or the list, so the only
+  // thing this bound protects is the phone's radio and memory: a busy search of
+  // a thousand sources must not queue a thousand throttled catalog reads.
+  static const _sourceCandidateMetadataConcurrency = 6;
   List<Book> _books = [];
   List<ShelfGroup> _shelfGroups = [];
   List<Book> _catalog = [];
@@ -821,8 +821,7 @@ class AppController extends ChangeNotifier {
           (entry) =>
               entry.candidate.sourceId != current.sourceId &&
               entry.candidate.sourceId != null &&
-              enabledSourceIds.contains(entry.candidate.sourceId) &&
-              (entry.info?.isReadyForDisplay ?? false),
+              enabledSourceIds.contains(entry.candidate.sourceId),
         )
         .toList();
     // A cached list is always authoritative for this opening, including when
@@ -898,9 +897,9 @@ class AppController extends ChangeNotifier {
   /// 搜索结果里的书还没加入书架也能换源，此时只有内存中的这本对象，所以直接
   /// 用传入的书籍定位同名候选。
   ///
-  /// [onUpdate] emits a candidate only after its mapped chapter and word count
-  /// are ready. Source discovery and metadata loading run together, so a usable
-  /// row can appear before a long all-source search finishes.
+  /// [onUpdate] emits candidates as their sources return them. A candidate's
+  /// mapped chapter and word count are filled in later by a bounded metadata
+  /// queue, so a usable row appears long before a long all-source search ends.
   Future<SourceCandidateSearchResult> findSourceCandidatesFor(
     Book current, {
     Future<void>? abortTrigger,
@@ -934,8 +933,6 @@ class AppController extends ChangeNotifier {
         >[];
     var nextMetadata = 0;
     var activeMetadataLoads = 0;
-    var availableMetadataSlots = _sourceCandidateMetadataBacklogLimit;
-    final metadataSlotWaiters = <Completer<bool>>[];
     var searchFinished = false;
     final metadataDrained = Completer<void>();
     var failedSources = 0;
@@ -953,34 +950,11 @@ class AppController extends ChangeNotifier {
       if (unavailableCandidateSourceIds.add(sourceId!)) failedSources++;
     }
 
-    Future<bool> acquireMetadataSlot() {
-      if (aborted) return Future.value(false);
-      if (availableMetadataSlots > 0) {
-        availableMetadataSlots--;
-        return Future.value(true);
-      }
-      final waiter = Completer<bool>();
-      metadataSlotWaiters.add(waiter);
-      return waiter.future;
-    }
-
-    void releaseMetadataSlot() {
-      if (metadataSlotWaiters.isNotEmpty) {
-        metadataSlotWaiters.removeAt(0).complete(!aborted);
-      } else if (!aborted) {
-        availableMetadataSlots++;
-      }
-    }
-
     late void Function() finishMetadataIfDrained;
 
     void cancelMetadataWaiters() {
       if (aborted) return;
       aborted = true;
-      for (final waiter in metadataSlotWaiters) {
-        if (!waiter.isCompleted) waiter.complete(false);
-      }
-      metadataSlotWaiters.clear();
       finishMetadataIfDrained();
     }
 
@@ -1030,27 +1004,40 @@ class AppController extends ChangeNotifier {
           item.book,
           abortTrigger: abortTrigger,
         );
-        if (!aborted && isEnabledAlternativeSource(item.book.sourceId)) {
-          if (info != null) {
-            ready[item.book.id] = item;
-            infoById[item.book.id] = info;
+        if (!aborted) {
+          if (!isEnabledAlternativeSource(item.book.sourceId)) {
+            // The source was removed or disabled mid-flight, so the candidate
+            // shown optimistically for it must go away again.
+            if (ready.remove(item.book.id) != null) {
+              infoById.remove(item.book.id);
+              report();
+            }
           } else {
-            // A failed catalog/map/content read means this source did not
-            // produce a complete candidate list. Keep an existing cache rather
-            // than replacing it with a transiently truncated result.
-            markUnavailableCandidateSource(item.book.sourceId);
+            if (info != null) {
+              ready[item.book.id] = item;
+              infoById[item.book.id] = info;
+            } else {
+              // The row stays selectable, only its chapter/word-count summary
+              // is missing: switching loads the target anyway and reports its
+              // own failure. A failed read still means this source did not
+              // produce a complete candidate list, so an existing complete
+              // cache must not be replaced by this truncated result.
+              markUnavailableCandidateSource(item.book.sourceId);
+            }
+            report();
           }
-          report();
         }
       } finally {
         activeMetadataLoads--;
-        releaseMetadataSlot();
         if (!aborted) scheduleMetadataLoads();
         finishMetadataIfDrained();
       }
     }
 
     scheduleMetadataLoads = () {
+      // Decoration never gates the list or the search: the queue only decides
+      // how many catalog reads may be in flight, and the sheet renders each row
+      // as soon as its source answered.
       while (!aborted &&
           activeMetadataLoads < _sourceCandidateMetadataConcurrency &&
           nextMetadata < metadataQueue.length) {
@@ -1086,22 +1073,27 @@ class AppController extends ChangeNotifier {
                 !isEnabledAlternativeSource(candidate.sourceId)) {
               continue;
             }
-            final acquired = await acquireMetadataSlot();
-            if (!acquired) return;
-            if (aborted || !isEnabledAlternativeSource(candidate.sourceId)) {
-              releaseMetadataSlot();
-              return;
-            }
-            metadataQueue.add((
+            // A source that returned this title is already a switchable target:
+            // switching loads the catalog itself and reports its own failure.
+            // Chapter mapping and word count are decoration that arrives later,
+            // so they must never hold the row back — with hundreds of sources a
+            // read of every candidate catalog would delay the whole list.
+            final item = (
               book: candidate,
               authorMatch:
                   authorKey.isNotEmpty &&
                   _matchKey(candidate.author) == authorKey,
               sourceOrder: sourceOrder,
               candidateOrder: resultOrder,
-            ));
-            scheduleMetadataLoads();
+            );
+            ready[candidate.id] = item;
+            metadataQueue.add(item);
           }
+          // Rows are published immediately and decoration is queued without
+          // blocking the search, so a slow catalog read never keeps a found
+          // source off screen nor stalls the remaining sources.
+          scheduleMetadataLoads();
+          report();
         }
         report();
       },
