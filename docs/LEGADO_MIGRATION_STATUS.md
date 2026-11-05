@@ -63,6 +63,19 @@
 | 换源作者过滤与字数排序 | 默认关闭作者过滤（与上游默认一致）；打开后重新搜索，因为过滤发生在收集候选阶段。 | [ChangeSourceSearchUseCase.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/domain/usecase/ChangeSourceSearchUseCase.kt) | 控制器与换源面板回归覆盖过滤生效、字数排序与设置持久化。 |
 | 并发率限速 | 按 `bookSourceUrl` 分量，`次数/毫秒` 或单数字；未声明或 `0` 不限速。 | [ConcurrentRateLimiter.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/help/ConcurrentRateLimiter.kt) | 限速器回归覆盖解析、串行放行、按源隔离与声明变更。 |
 
+### 真机验证（MuMu 安卓 15，1399 个真实书源）
+
+在模拟器上逐页走查后修掉六处偏差，均已带回归测试：
+
+1. 发现页分类格子按屏宽取 span，手机上默认 span 等于整行，格子被拉成通栏 —— 上游 `ExploreViewModel.kt:312` 与 `ExploreKindSelectSheet.kt:85` 都把每行上限写死 6，改为固定 6。
+2. 书源页的分组筛选行混入 `搜索链接规则为空`、`校验超时` 这类健康标签（书源行内已过滤，两个入口不一致）—— 过滤挪到 `AppController.sourceGroups`。
+3. 选择器引擎不支持的 CSS（`package:html` 会抛 `UnimplementedError` 而非 `FormatException`）被当成「网站失效」写回书源 —— `_querySelectorAll` 同时吞掉 `Exception` 与 `Error`，交回 fallback 分支机制。
+4. 写回 `bookSourceComment` 的 `// Error:` 备注里阶段名是英文 enum 名 —— 收进 `SourceHealthStage.label`，与面板共用同一份中文。
+5. 分组筛选把 79 个分组平铺成 chips，占掉十行屏幕 —— 按上游 `BookSourceScreen.kt:448` 的 `showGroupFilterSheet` 改成顶栏按钮 + 面板。
+6. 换源候选行的源级操作（置顶 / 置底 / 停用 / 删除）补齐。
+
+仍在真机验证范围之外：换源的停用与删除确认、内容模式翻页、`text` / `toggle` / `select` 类分类的实际交互、真实外部书源的整轮校验结论。
+
 ## 已识别的后续安全迁移能力（非上游完整功能清单）
 
 以下能力仍不受当前实现支持。其中能在安全边界内定义清晰语义的部分会作为后续增量单独设计、测试和验证；Cookie/WebView、未审查远程规则、DRM 绕过、代理绕过与广泛存储权限继续排除。未列出的 Legado 功能也不能据此视为已迁移。
