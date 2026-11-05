@@ -285,31 +285,21 @@ class _SourcesScreenState extends State<SourcesScreen> {
             ),
             const SizedBox(height: 12),
           ],
-          if (groups.isNotEmpty)
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _GroupChip(
-                  key: const Key('source-group-all'),
-                  label: '全部',
-                  count: sources.length,
-                  selected: _group == null,
-                  onSelected: () => setState(() => _group = null),
-                ),
-                for (final group in groups)
-                  _GroupChip(
-                    key: Key('source-group-$group'),
-                    label: group,
-                    count: sources
-                        .where((source) => source.groups.contains(group))
-                        .length,
-                    selected: _group == group,
-                    onSelected: () =>
-                        setState(() => _group = _group == group ? null : group),
-                  ),
-              ],
+          if (groups.isNotEmpty) ...[
+            // 与 legado 一致：分组筛选是顶栏上的一个按钮，不是把每个分组摊在
+            // 页面上。真实书源集合动辄七八十个分组，平铺会占掉十行屏幕，把书源
+            // 列表挤到折叠线以下 —— 筛选器比被筛选的内容还占地方。
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ActionChip(
+                key: const Key('source-group-filter'),
+                avatar: const Icon(Icons.filter_list, size: 18),
+                label: Text(_group == null ? '全部分组' : _group!),
+                onPressed: () => _openGroupFilter(groups),
+              ),
             ),
+            const SizedBox(height: 6),
+          ],
           const SizedBox(height: 6),
           Wrap(
             spacing: 4,
@@ -627,6 +617,74 @@ class _SourcesScreenState extends State<SourcesScreen> {
     _group = null;
   });
 
+  /// 分组筛选放在面板里，和 legado 的 `showGroupFilterSheet` 一致。
+  ///
+  /// 每组带上它包含的源数，用户才知道「点下去会剩几条」；计数与工具栏用的是
+  /// 同一份 `widget.controller.sources`，不会和列表打架。
+  Future<void> _openGroupFilter(List<String> groups) async {
+    final sources = widget.controller.sources;
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      constraints: const BoxConstraints(maxWidth: 600),
+      builder: (context) => SafeArea(
+        top: false,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .7,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(
+                  '按分组筛选',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              Flexible(
+                child: ListView(
+                  key: const Key('source-group-list'),
+                  shrinkWrap: true,
+                  children: [
+                    ListTile(
+                      key: const Key('source-group-all'),
+                      title: const Text('全部'),
+                      trailing: Text(
+                        '${sources.length}',
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                      selected: _group == null,
+                      onTap: () => Navigator.pop(context, ''),
+                    ),
+                    for (final group in groups)
+                      ListTile(
+                        key: Key('source-group-$group'),
+                        title: Text(group),
+                        trailing: Text(
+                          '${sources.where((source) => source.groups.contains(group)).length}',
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                        selected: _group == group,
+                        onTap: () => Navigator.pop(context, group),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || picked == null) return;
+    setState(() => _group = picked.isEmpty ? null : picked);
+  }
+
   Future<void> _toggle(BookSource source, bool enabled) async {
     setState(() => _pending.add(source.id));
     try {
@@ -836,34 +894,6 @@ class _SourcesScreenState extends State<SourcesScreen> {
       ),
     );
   }
-}
-
-class _GroupChip extends StatelessWidget {
-  const _GroupChip({
-    super.key,
-    required this.label,
-    required this.count,
-    required this.selected,
-    required this.onSelected,
-  });
-
-  final String label;
-  final int count;
-  final bool selected;
-  final VoidCallback onSelected;
-
-  @override
-  Widget build(BuildContext context) => ChoiceChip(
-    label: Text('$label · $count'),
-    selected: selected,
-    onSelected: (_) => onSelected(),
-    labelStyle: TextStyle(
-      fontSize: 12,
-      color: selected ? Colors.white : AppColors.ink,
-    ),
-    selectedColor: AppColors.ink,
-    showCheckmark: false,
-  );
 }
 
 class _GroupTag extends StatelessWidget {

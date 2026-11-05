@@ -388,12 +388,17 @@ void _manageGroup() {
       ],
     );
 
+    // 分组筛选是顶栏按钮 + 面板（legado 的 showGroupFilterSheet），不是平铺 chips。
+    await tester.tap(find.byKey(const Key('source-group-filter')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('source-group-都市')));
     await tester.pumpAndSettle();
     expect(_name('乙书源'), findsOneWidget);
     expect(_name('甲书源'), findsNothing);
     expect(find.text('1 / 2 个'), findsOneWidget);
 
+    await tester.tap(find.byKey(const Key('source-group-filter')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('source-group-all')));
     await tester.pumpAndSettle();
     expect(_name('甲书源'), findsOneWidget);
@@ -415,6 +420,9 @@ void _manageGroup() {
         _manageJson(url: 'https://b.example', name: '乙书源', group: '都市,搜索失效'),
       ],
     );
+
+    await tester.tap(find.byKey(const Key('source-group-filter')));
+    await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('source-group-玄幻')), findsOneWidget);
     expect(find.byKey(const Key('source-group-都市')), findsOneWidget);
