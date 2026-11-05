@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book_source.dart';
+import '../../domain/source_health.dart';
 import '../components/common.dart';
 import '../components/source_edit_sheet.dart';
 import '../components/source_health_sheet.dart';
@@ -510,13 +511,20 @@ class _SourcesScreenState extends State<SourcesScreen> {
                   ),
                 ],
               ),
-              if (source.groups.isNotEmpty) ...[
+              if (source.groups.any(
+                (group) => !SourceHealthTag.isInvalid(group),
+              )) ...[
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    for (final group in source.groups) _GroupTag(label: group),
+                    // Health verdicts live in the group field too, but they are
+                    // reported by the status line below; showing them as neutral
+                    // chips would read like user-chosen groups.
+                    for (final group in source.groups)
+                      if (!SourceHealthTag.isInvalid(group))
+                        _GroupTag(label: group),
                   ],
                 ),
               ],
@@ -602,6 +610,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
       buffer.write(source.enabledExplore ? ' · 参与发现' : ' · 不参与发现');
     }
     if (source.customOrder != 0) buffer.write(' · 手动排序');
+    // respondTime is written by every health check, so it doubles as "how long
+    // this source last took" — the same thing Legado shows and sorts by.
+    if (source.respondTime > 0) {
+      buffer.write(' · 响应 ${(source.respondTime / 1000).toStringAsFixed(1)} 秒');
+    }
+    final invalid = source.invalidGroups;
+    if (invalid.isNotEmpty) buffer.write(' · ${invalid.join('、')}');
     return buffer.toString();
   }
 

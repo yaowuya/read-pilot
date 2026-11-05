@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../domain/book.dart';
 import '../domain/book_source.dart';
 import 'source_importer.dart';
+import 'source_runtime/concurrent_rate_limiter.dart';
 import 'source_runtime/content_normalizer.dart';
 import 'source_runtime/content_replacement.dart';
 import 'source_runtime/request_plan.dart';
@@ -63,6 +64,7 @@ class SourceEngine {
   final RuleInterpreter _interpreter;
   final SandboxedScriptRuntime _scriptRuntime;
   final SourceTransport _transport;
+  final ConcurrentRateLimiters _rateLimiters = ConcurrentRateLimiters();
   final Duration timeout;
   final int maxResponseBytes;
 
@@ -209,6 +211,8 @@ class SourceEngine {
       throw const SourceException('封面地址必须是与书源同源的 HTTP(S) 链接。');
     }
     try {
+      // Covers hit the same host, so they share the source's rate budget.
+      await _rateLimiters.acquire(source.id, source.concurrentRate);
       final response = await _transport.execute(
         _planner.plan(source, requested.toString()),
         policy: SourceNetworkPolicy(allowedOrigins: {declared.origin}),
@@ -530,6 +534,13 @@ class SourceEngine {
       throw const SourceException('书源声明的地址必须是无账号密码的 HTTP(S) 地址。');
     }
     try {
+      await _throwIfCancelled(abortTrigger);
+      // Legado honors a source's own `concurrentRate` on every request it makes,
+      // so a source that asks for 3 请求/秒 gets at most that even when a
+      // 16-source 换源 search is running concurrently. Waiting happens before the
+      // template is resolved so a queued request never holds a resolved URL that
+      // could go stale while it waits.
+      await _rateLimiters.acquire(source.id, source.concurrentRate);
       await _throwIfCancelled(abortTrigger);
       final resolvedTemplate = await _resolveRequestTemplate(
         source,

@@ -105,6 +105,9 @@ class SourceDefinition {
     required this.enabledExplore,
     required this.comment,
     required this.customOrder,
+    required this.concurrentRate,
+    required this.respondTime,
+    required this.lastUpdateTime,
     required Map<String, String> staticHeaders,
     required Map<String, Map<String, dynamic>> ruleSets,
     required List<SourceCapabilityRequirement> requirements,
@@ -189,6 +192,9 @@ class SourceDefinition {
       enabledExplore: enabledExploreValue == true || enabledExploreValue == 1,
       comment: (commentValue as String?)?.trim(),
       customOrder: _parseOrder(rawJson['customOrder']),
+      concurrentRate: _parseConcurrentRate(rawJson['concurrentRate']),
+      respondTime: _parseOrder(rawJson['respondTime']),
+      lastUpdateTime: _parseOrder(rawJson['lastUpdateTime']),
       staticHeaders: staticHeaders,
       ruleSets: ruleSets,
       requirements: requirements,
@@ -202,6 +208,17 @@ class SourceDefinition {
     if (value is num) return value.toInt();
     if (value is String) return int.tryParse(value.trim()) ?? 0;
     return 0;
+  }
+
+  /// `concurrentRate` is documented as a string but hand-written sources
+  /// sometimes ship a bare number, so both forms are accepted.
+  static String? _parseConcurrentRate(dynamic value) {
+    if (value is String) {
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? null : trimmed;
+    }
+    if (value is num) return '$value';
+    return null;
   }
 
   final Map<String, dynamic> _rawJson;
@@ -228,6 +245,23 @@ class SourceDefinition {
 
   /// Legado's `customOrder`: lower sorts first, and `0` means "default order".
   final int customOrder;
+
+  /// Legado's `concurrentRate`, e.g. `"3/1000"` or `"500"`.
+  ///
+  /// Kept as the raw string because Legado documents it that way in source
+  /// comments and users paste those comments into their sources; parsing
+  /// belongs to the limiter, not to the model.
+  final String? concurrentRate;
+
+  /// Wall-clock milliseconds Legado stores for the last successful response.
+  ///
+  /// `0` means "never measured"; the source list sorts on it and the health
+  /// check writes it, exactly like Legado's `respondTime`.
+  final int respondTime;
+
+  /// Legado's `lastUpdateTime`, used by the importer to decide whether an
+  /// incoming entry is newer than the stored one.
+  final int lastUpdateTime;
 
   final Map<String, String> staticHeaders;
 

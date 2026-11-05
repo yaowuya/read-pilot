@@ -11,6 +11,8 @@ import '../domain/reader_style_preset.dart';
 import '../domain/reader_mark.dart';
 import '../domain/reading_activity.dart';
 import '../domain/shelf_group.dart';
+import '../domain/source_check_settings.dart';
+import '../domain/source_health.dart';
 import '../domain/source_import.dart';
 import '../domain/source_switch_candidate.dart';
 import '../services/book_text_rules.dart';
@@ -734,6 +736,44 @@ class AppRepository {
     await _meta
         .record('change_source_settings')
         .put(database, settings.toJson());
+  }
+
+  /// What a book-source health check is allowed to probe.
+  ///
+  /// Legado keeps this in its own settings repository; storing it beside the
+  /// reader and 换源 preferences keeps every user-tunable value in one place.
+  Future<SourceCheckSettings> sourceCheckSettings() async =>
+      SourceCheckSettings.fromJson(
+        Map<String, dynamic>.from(
+          await _meta.record('source_check_settings').get(database) ?? {},
+        ),
+      );
+
+  Future<void> saveSourceCheckSettings(SourceCheckSettings settings) async {
+    await _meta
+        .record('source_check_settings')
+        .put(database, settings.toJson());
+  }
+
+  /// Writes one health-check verdict back onto the source record.
+  ///
+  /// Legado has no separate health table: `BookSourceCheckRepository` clears the
+  /// old verdict, then stores `respondTime`, adds the failing stage tags to
+  /// `bookSourceGroup` and prepends a `// Error:` block to `bookSourceComment`.
+  /// Doing the same keeps the source row honest across restarts instead of
+  /// throwing the diagnosis away when the sheet closes.
+  Future<BookSource> recordSourceHealth({
+    required BookSource source,
+    required SourceHealthReport report,
+  }) async {
+    var updated = source.removeInvalidGroups().removeErrorComment();
+    updated = updated.withRespondTime(report.respondTimeMillis);
+    final tags = report.tags;
+    if (tags.isNotEmpty) updated = updated.addGroups(tags);
+    final failure = report.failureSummary;
+    if (failure != null) updated = updated.addErrorComment(failure);
+    await replaceSource(updated);
+    return updated;
   }
 
   static String _stylePresetName(String value) {

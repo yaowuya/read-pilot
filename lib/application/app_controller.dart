@@ -14,8 +14,9 @@ import '../domain/reader_style_preset.dart';
 import '../domain/reader_mark.dart';
 import '../domain/reading_activity.dart';
 import '../domain/shelf_group.dart';
-import '../domain/source_import.dart';
+import '../domain/source_check_settings.dart';
 import '../domain/source_health.dart';
+import '../domain/source_import.dart';
 import '../domain/source_switch.dart';
 import '../domain/source_switch_candidate.dart';
 import '../services/book_text_rules.dart';
@@ -60,6 +61,7 @@ class AppController extends ChangeNotifier {
   final _textRulesRevisions = <String, int>{};
   ReaderSettings _settings = const ReaderSettings();
   ChangeSourceSettings _changeSourceSettings = const ChangeSourceSettings();
+  SourceCheckSettings _sourceCheckSettings = const SourceCheckSettings();
   final _chapterLoads = <String, Future<Chapter>>{};
   final _cacheClears = <String>{};
   bool _disposed = false;
@@ -223,6 +225,7 @@ class AppController extends ChangeNotifier {
     _readingActivities = await repository.readingActivities();
     _settings = await repository.settings();
     _changeSourceSettings = await repository.changeSourceSettings();
+    _sourceCheckSettings = await repository.sourceCheckSettings();
     _readerStylePresets = await repository.readerStylePresets();
     _notify();
   }
@@ -719,12 +722,39 @@ class AppController extends ChangeNotifier {
     throw const SourceException('书源已移除。已缓存章节仍可阅读，获取新章节需重新导入书源。');
   }
 
+  /// Checks one source and records the verdict on it, like Legado does.
+  ///
+  /// The repository write is what makes the difference visible after the sheet
+  /// closes: `respondTime`, the failing stage tags and the `// Error:` comment
+  /// all land on the source record, so the list keeps showing which workflow
+  /// broke instead of forgetting the diagnosis.
   Future<SourceHealthReport> checkSourceHealth(
     String sourceId, {
     Future<void>? abortTrigger,
-  }) => SourceHealthCheck(
-    engine,
-  ).check(_source(sourceId), abortTrigger: abortTrigger);
+  }) async {
+    final source = _source(sourceId);
+    final report = await SourceHealthCheck(
+      engine,
+      settings: _sourceCheckSettings,
+    ).check(source, abortTrigger: abortTrigger);
+    // A cancelled run says nothing about the source, so it must not overwrite the
+    // last real verdict with zero-duration noise.
+    if (!_isCancelled(report)) {
+      final updated = await repository.recordSourceHealth(
+        source: source,
+        report: report,
+      );
+      _sources = [
+        for (final item in _sources) item.id == sourceId ? updated : item,
+      ];
+      _notify();
+    }
+    return report;
+  }
+
+  static bool _isCancelled(SourceHealthReport report) => report.results.any(
+    (result) => result.status == SourceHealthStatus.cancelled,
+  );
 
   Future<SourceImportPreview> prepareSourceImport(
     SourceImportInput input, {
@@ -1517,6 +1547,16 @@ class AppController extends ChangeNotifier {
   Future<void> updateChangeSourceSettings(ChangeSourceSettings settings) async {
     await repository.saveChangeSourceSettings(settings);
     _changeSourceSettings = settings;
+    _notify();
+  }
+
+  /// What a source health check is allowed to probe.
+  SourceCheckSettings get sourceCheckSettings => _sourceCheckSettings;
+
+  Future<void> updateSourceCheckSettings(SourceCheckSettings settings) async {
+    if (!settings.isUsable) throw const FormatException('至少需要开启搜索或发现检查。');
+    await repository.saveSourceCheckSettings(settings);
+    _sourceCheckSettings = settings;
     _notify();
   }
 
