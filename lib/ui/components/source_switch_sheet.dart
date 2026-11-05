@@ -28,6 +28,17 @@ class SourceSwitchSheet extends StatefulWidget {
 class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
   static const _paper = Color(0xFFF1EDE1);
   static const _surface = Color(0xFFFDF9ED);
+
+  /// 打开时占屏比例：上方留出正文，用户能一边看当前页一边挑书源。
+  static const _initialSize = .66;
+
+  /// 向上拖到顶时占屏比例。
+  static const _maxSize = .9;
+
+  /// 向下拖到底时占屏比例，再往下就是关闭。
+  static const _minSize = .4;
+
+  final _sheetController = DraggableScrollableController();
   final _filter = TextEditingController();
   SourceCandidateSearchResult? _result;
   Completer<void>? _abort;
@@ -51,6 +62,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
   @override
   void dispose() {
     if (!(_abort?.isCompleted ?? true)) _abort!.complete();
+    _sheetController.dispose();
     _filter.dispose();
     super.dispose();
   }
@@ -220,147 +232,170 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
         .length;
     final filtering = _filter.text.trim().isNotEmpty;
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
-    // 换源是半屏操作：上方留出正文，用户能一边看当前页一边挑书源。
-    final height = (MediaQuery.sizeOf(context).height - keyboard) * .66;
-    return ColoredBox(
-      color: _paper,
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.only(bottom: keyboard),
-          child: SizedBox(
-            height: height,
+    // 换源面板是可拖拽的半屏：默认 2/3 屏，往上滑铺开到 90% 方便一次看更多候选，
+    // 往下滑逐渐收矮，一直滑到底就关掉。键盘弹出时在面板外让出高度，
+    // 这样比例始终按可用高度算，不会把内容挤没。
+    return Padding(
+      padding: EdgeInsets.only(bottom: keyboard),
+      child: DraggableScrollableSheet(
+        controller: _sheetController,
+        initialChildSize: _initialSize,
+        minChildSize: _minSize,
+        maxChildSize: _maxSize,
+        expand: false,
+        builder: (context, scrollController) => ColoredBox(
+          color: _paper,
+          child: SafeArea(
+            top: false,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Semantics(
-                          header: true,
-                          child: Text(
-                            '换源',
-                            style: Theme.of(context).textTheme.titleLarge,
+                GestureDetector(
+                  // 标题行也要能拖：用户上手的第一反应是抓最上面那条，
+                  // 而不是去够下面的列表。
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragUpdate: _resizeSheet,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Semantics(
+                            header: true,
+                            child: Text(
+                              '换源',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
                           ),
                         ),
-                      ),
-                      IconButton(
-                        tooltip: '刷新候选',
-                        onPressed: !_loading && _switchingId == null
-                            ? () => _reload(manual: true)
-                            : null,
-                        icon: const Icon(Icons.refresh),
-                      ),
-                      IconButton(
-                        tooltip: '关闭',
-                        onPressed: _switchingId == null
-                            ? () => Navigator.pop(context)
-                            : null,
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
+                        IconButton(
+                          tooltip: '刷新候选',
+                          onPressed: !_loading && _switchingId == null
+                              ? () => _reload(manual: true)
+                              : null,
+                          icon: const Icon(Icons.refresh),
+                        ),
+                        IconButton(
+                          tooltip: '关闭',
+                          onPressed: _switchingId == null
+                              ? () => Navigator.pop(context)
+                              : null,
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 Flexible(
                   fit: FlexFit.loose,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                widget.book.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '当前书源：${widget.book.sourceLabel}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.muted,
+                  child: GestureDetector(
+                    // 头部没有可滚动内容，拖这里也应该能改变面板高度，
+                    // 否则用户只有抓住下方列表才拖得动。
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragUpdate: _resizeSheet,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  widget.book.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
                                 ),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                _currentChapterDescription,
-                                key: const Key('source-switch-current-chapter'),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.muted,
-                                ),
-                              ),
-                              if (result?.fromCache ?? false) ...[
-                                const SizedBox(height: 10),
-                                QuietPanel(
-                                  key: const Key('source-switch-cache-status'),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 8,
+                                const SizedBox(height: 4),
+                                Text(
+                                  '当前书源：${widget.book.sourceLabel}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: AppColors.muted,
                                   ),
-                                  child: Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.history,
-                                        size: 16,
-                                        color: AppColors.muted,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          '已恢复上次加载的书源，10 天内可直接选择。',
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: AppColors.muted,
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  _currentChapterDescription,
+                                  key: const Key(
+                                    'source-switch-current-chapter',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
+                                if (result?.fromCache ?? false) ...[
+                                  const SizedBox(height: 10),
+                                  QuietPanel(
+                                    key: const Key(
+                                      'source-switch-cache-status',
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 8,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.history,
+                                          size: 16,
+                                          color: AppColors.muted,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            '已恢复上次加载的书源，10 天内可直接选择。',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: AppColors.muted,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 16),
+                                TextField(
+                                  key: const Key('source-switch-filter'),
+                                  controller: _filter,
+                                  enabled: _switchingId == null,
+                                  onChanged: (_) => setState(() {}),
+                                  decoration: InputDecoration(
+                                    hintText: '筛选书源或作者',
+                                    prefixIcon: const Icon(
+                                      Icons.search,
+                                      size: 20,
+                                    ),
+                                    fillColor: _surface,
+                                    isDense: true,
+                                    suffixIcon: _filter.text.isEmpty
+                                        ? null
+                                        : IconButton(
+                                            tooltip: '清除筛选',
+                                            onPressed: _clearFilter,
+                                            icon: const Icon(
+                                              Icons.close,
+                                              size: 18,
+                                            ),
+                                          ),
                                   ),
                                 ),
+                                const SizedBox(height: 12),
                               ],
-                              const SizedBox(height: 16),
-                              TextField(
-                                key: const Key('source-switch-filter'),
-                                controller: _filter,
-                                enabled: _switchingId == null,
-                                onChanged: (_) => setState(() {}),
-                                decoration: InputDecoration(
-                                  hintText: '筛选书源或作者',
-                                  prefixIcon: const Icon(
-                                    Icons.search,
-                                    size: 20,
-                                  ),
-                                  fillColor: _surface,
-                                  isDense: true,
-                                  suffixIcon: _filter.text.isEmpty
-                                      ? null
-                                      : IconButton(
-                                          tooltip: '清除筛选',
-                                          onPressed: _clearFilter,
-                                          icon: const Icon(
-                                            Icons.close,
-                                            size: 18,
-                                          ),
-                                        ),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                            ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -475,6 +510,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                           child: CircularProgressIndicator(),
                         )
                       : ListView.builder(
+                          controller: scrollController,
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                           itemCount: candidates.length + 1,
                           itemBuilder: (context, index) => index == 0
@@ -537,6 +573,19 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
         ),
       ),
     );
+  }
+
+  /// 拖动头部区改变面板高度。换算成占屏比例后再交给 sheet 控制器，
+  /// 这样滑动手感和直接拖列表一致。
+  void _resizeSheet(DragUpdateDetails details) {
+    if (!_sheetController.isAttached) return;
+    final height = MediaQuery.sizeOf(context).height;
+    if (height <= 0) return;
+    final next = (_sheetController.size - details.delta.dy / height).clamp(
+      _minSize,
+      _maxSize,
+    );
+    _sheetController.jumpTo(next);
   }
 
   void _clearFilter() {

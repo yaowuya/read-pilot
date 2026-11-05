@@ -263,6 +263,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('dragging the sheet up grows it, dragging down shrinks it', (
+    tester,
+  ) async {
+    controller.candidates = [
+      _book('a-first', '甲书源', '原作者'),
+      _book('b-second', '乙书源', '原作者'),
+    ];
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+    final collapsed = tester.getRect(find.byType(SourceSwitchSheet)).height;
+
+    // 用户想一次看更多候选时会往上滑。
+    await tester.drag(
+      find.byKey(const Key('source-candidate-a-first')),
+      const Offset(0, -400),
+    );
+    await tester.pumpAndSettle();
+    final expanded = tester.getRect(find.byType(SourceSwitchSheet)).height;
+    expect(expanded, greaterThan(collapsed));
+    expect(expanded, greaterThanOrEqualTo(812 * .8));
+    expect(expanded, lessThanOrEqualTo(812 * .9));
+
+    // 往下滑收回去，但还没收到底，所以面板还在。
+    await tester.drag(
+      find.byKey(const Key('source-candidate-a-first')),
+      const Offset(0, 260),
+    );
+    await tester.pumpAndSettle();
+    final shrunk = tester.getRect(find.byType(SourceSwitchSheet)).height;
+    expect(shrunk, lessThan(expanded));
+    expect(find.byType(SourceSwitchSheet), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'restores cached candidates before requesting a fresh source search',
     (tester) async {
