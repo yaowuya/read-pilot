@@ -701,11 +701,86 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               else
-                const Icon(Icons.chevron_right, color: AppColors.muted),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _candidateSourceMenu(candidate),
+                    const Icon(Icons.chevron_right, color: AppColors.muted),
+                  ],
+                ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  /// 源级操作：换源时发现某个源不可用，就地置顶/置底/停用/删除，
+  /// 不必退出面板再去书源页找它（Legado 的换源列表同样提供这四项）。
+  Widget _candidateSourceMenu(Book candidate) {
+    final sourceId = candidate.sourceId;
+    if (sourceId == null) return const SizedBox.shrink();
+    final installed = widget.controller.sources.any(
+      (source) => source.id == sourceId,
+    );
+    if (!installed) return const SizedBox.shrink();
+    return PopupMenuButton<CandidateSourceAction>(
+      key: Key('source-candidate-menu-${candidate.id}'),
+      tooltip: '书源操作',
+      enabled: _switchingId == null,
+      padding: EdgeInsets.zero,
+      icon: const Icon(Icons.more_vert, size: 20, color: AppColors.muted),
+      onSelected: (action) => unawaited(_sourceAction(candidate, action)),
+      itemBuilder: (_) => const [
+        PopupMenuItem(value: CandidateSourceAction.top, child: Text('置顶书源')),
+        PopupMenuItem(value: CandidateSourceAction.bottom, child: Text('置底书源')),
+        PopupMenuItem(
+          value: CandidateSourceAction.disable,
+          child: Text('停用书源'),
+        ),
+        PopupMenuItem(value: CandidateSourceAction.delete, child: Text('删除书源')),
+      ],
+    );
+  }
+
+  Future<void> _sourceAction(
+    Book candidate,
+    CandidateSourceAction action,
+  ) async {
+    final sourceId = candidate.sourceId;
+    if (sourceId == null) return;
+    if (action == CandidateSourceAction.delete) {
+      final name = candidate.sourceLabel;
+      final confirmed = await confirmRemoval(
+        context,
+        '移除“$name”？',
+        '已缓存的书籍仍可阅读，新的章节需要重新导入书源才能获取。',
+      );
+      if (!confirmed || !mounted) return;
+    }
+    final kept = await widget.controller.applyCandidateSourceAction(
+      sourceId,
+      action,
+    );
+    if (!mounted) return;
+    if (!kept) {
+      setState(() {
+        _result = _result?.withoutSource(sourceId);
+        _error = null;
+      });
+      showMessage(context, '已删除该书源。');
+      return;
+    }
+    if (action == CandidateSourceAction.disable) {
+      // 停用的书源不再参与换源，行必须立刻消失，否则用户会以为操作没生效。
+      setState(() => _result = _result?.withoutSource(sourceId));
+      showMessage(context, '已停用该书源。');
+      return;
+    }
+    setState(() {});
+    showMessage(
+      context,
+      action == CandidateSourceAction.top ? '已置顶该书源。' : '已置底该书源。',
     );
   }
 }

@@ -251,6 +251,15 @@ void main() {
       );
       await repository.saveSources([yi.withCustomOrder(-5)]);
       expect((await repository.sources()).first.name, '乙');
+
+      // 置底是置顶的镜像操作：取当前最大值 +1，所以排在最后。
+      await repository.moveSourceToBottom('https://jia.example');
+      final afterBottom = (await repository.sources()).toList();
+      expect(afterBottom.last.name, '甲');
+      expect(
+        afterBottom.last.customOrder,
+        greaterThan(afterBottom.first.customOrder),
+      );
     },
   );
 

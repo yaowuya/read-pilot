@@ -1388,6 +1388,28 @@ class AppRepository {
     return next;
   }
 
+  /// Moves [id] below every other source by taking the current maximum order and
+  /// adding one, matching legado's `bottomSource`.
+  ///
+  /// Returns the saved source, or null when the id is not installed.
+  Future<BookSource?> moveSourceToBottom(String id) async {
+    BookSource? target;
+    int? maxOrder;
+    for (final record in await _sources.find(database)) {
+      final order = _customOrder(record.value['customOrder']);
+      if (record.key == id) {
+        target = BookSource(Map<String, dynamic>.from(record.value));
+        continue;
+      }
+      if (maxOrder == null || order > maxOrder) maxOrder = order;
+    }
+    final resolved = target;
+    if (resolved == null) return null;
+    final next = resolved.withCustomOrder((maxOrder ?? 0) + 1);
+    await saveSource(next);
+    return next;
+  }
+
   static int _customOrder(Object? value) {
     if (value is num) return value.toInt();
     if (value is String) return int.tryParse(value.trim()) ?? 0;

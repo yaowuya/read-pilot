@@ -1499,6 +1499,43 @@ class AppController extends ChangeNotifier {
     _notify();
   }
 
+  Future<void> moveSourceToBottom(String id) async {
+    final moved = await repository.moveSourceToBottom(id);
+    if (moved == null) return;
+    _sources = await repository.sources();
+    _notify();
+  }
+
+  /// Applies a source-level action from the 换源 candidate list.
+  ///
+  /// Legado's change-source sheet offers 置顶/置底/停用/删除 per candidate
+  /// (`ChangeBookSourceComposeViewModel`), because a bad source is usually
+  /// discovered while hunting for a replacement. Returns whether the source is
+  /// still installed afterwards, so callers can drop the row.
+  Future<bool> applyCandidateSourceAction(
+    String sourceId,
+    CandidateSourceAction action,
+  ) async {
+    switch (action) {
+      case CandidateSourceAction.top:
+        await moveSourceToTop(sourceId);
+        return true;
+      case CandidateSourceAction.bottom:
+        await moveSourceToBottom(sourceId);
+        return true;
+      case CandidateSourceAction.disable:
+        final source = _sources
+            .where((item) => item.id == sourceId)
+            .firstOrNull;
+        if (source == null) return false;
+        await setSourceEnabled(source, false);
+        return true;
+      case CandidateSourceAction.delete:
+        await deleteSource(sourceId);
+        return false;
+    }
+  }
+
   Future<void> deleteSources(Iterable<String> ids) async {
     final removing = ids.toSet();
     if (removing.isEmpty) return;
@@ -1744,7 +1781,38 @@ class SourceCandidateSearchResult {
 
   SourceCandidateInfo? infoFor(Book candidate) =>
       candidateInfoById[candidate.id];
+
+  /// Drops every candidate that came from [sourceId].
+  ///
+  /// Deleting or disabling a source from the 换源 list must remove its row at
+  /// once; leaving it visible would offer a source that no longer exists.
+  SourceCandidateSearchResult withoutSource(String sourceId) {
+    final kept = [
+      for (final candidate in candidates)
+        if (candidate.sourceId != sourceId) candidate,
+    ];
+    if (kept.length == candidates.length) return this;
+    return SourceCandidateSearchResult(
+      kept,
+      failedSources: failedSources,
+      unavailableCandidateSourceIds: unavailableCandidateSourceIds,
+      candidateInfoById: {
+        for (final candidate in kept)
+          candidate.id: ?candidateInfoById[candidate.id],
+      },
+      pendingMetadata: pendingMetadata,
+      fromCache: fromCache,
+      loadedAt: loadedAt,
+    );
+  }
 }
+
+/// Per-candidate source actions offered in the 换源 sheet.
+///
+/// Legado exposes the same four actions on each change-source candidate
+/// (`ChangeBookSourceComposeViewModel`): promote, demote, disable and delete a
+/// source without leaving the sheet.
+enum CandidateSourceAction { top, bottom, disable, delete }
 
 class SourceSearchGroup {
   const SourceSearchGroup(this.source, this.books, {this.error});

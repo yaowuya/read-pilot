@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:read_pilot/application/app_controller.dart';
 import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
+import 'package:read_pilot/domain/book_source.dart';
 import 'package:read_pilot/domain/source_switch_candidate.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/components/source_switch_sheet.dart';
@@ -172,6 +173,27 @@ class _SwitchController extends AppController {
     if (switchError != null) throw switchError!;
     return pendingSwitch ??
         current.rebindSource(candidate, position: current.position);
+  }
+
+  /// Installed sources offered by the reader page. Empty means "use the real
+  /// repository", so tests that do not care about source actions are unaffected.
+  List<BookSource> installedSources = const [];
+  CandidateSourceAction? lastAction;
+  String? lastActionSourceId;
+  bool actionKeepsRow = true;
+
+  @override
+  List<BookSource> get sources =>
+      installedSources.isEmpty ? super.sources : installedSources;
+
+  @override
+  Future<bool> applyCandidateSourceAction(
+    String sourceId,
+    CandidateSourceAction action,
+  ) async {
+    lastAction = action;
+    lastActionSourceId = sourceId;
+    return actionKeepsRow;
   }
 }
 
@@ -948,5 +970,98 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.searches, 2);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('candidate rows expose the source actions legado offers', (
+    tester,
+  ) async {
+    controller.installedSources = [
+      BookSource({
+        'bookSourceUrl': 'https://zeta.example',
+        'bookSourceName': 'Zeta',
+      }),
+    ];
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('source-candidate-menu-z-first')));
+    await tester.pumpAndSettle();
+    expect(find.text('置顶书源'), findsOneWidget);
+    expect(find.text('置底书源'), findsOneWidget);
+    expect(find.text('停用书源'), findsOneWidget);
+    expect(find.text('删除书源'), findsOneWidget);
+
+    await tester.tap(find.text('置顶书源'));
+    await tester.pumpAndSettle();
+    expect(controller.lastAction, CandidateSourceAction.top);
+    expect(controller.lastActionSourceId, 'https://zeta.example');
+    // 置顶/置底只是改排序，候选行必须留在原处。
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+  });
+
+  testWidgets('disabling a source from the candidate list drops its row', (
+    tester,
+  ) async {
+    controller.installedSources = [
+      BookSource({
+        'bookSourceUrl': 'https://zeta.example',
+        'bookSourceName': 'Zeta',
+      }),
+    ];
+    controller.actionKeepsRow = true;
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('source-candidate-menu-z-first')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('停用书源'));
+    await tester.pumpAndSettle();
+
+    expect(controller.lastAction, CandidateSourceAction.disable);
+    // 停用的源不再参与换源：行必须立刻消失，否则用户会以为没生效。
+    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+    expect(find.text('已停用该书源。'), findsOneWidget);
+  });
+
+  testWidgets('deleting a source from the candidate list confirms first', (
+    tester,
+  ) async {
+    controller.installedSources = [
+      BookSource({
+        'bookSourceUrl': 'https://zeta.example',
+        'bookSourceName': 'Zeta',
+      }),
+    ];
+    controller.actionKeepsRow = false;
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('source-candidate-menu-z-first')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除书源'));
+    await tester.pumpAndSettle();
+
+    // 删除是破坏性操作，必须先确认。
+    expect(find.text('确认移除'), findsOneWidget);
+    expect(controller.lastAction, isNull);
+    await tester.tap(find.text('确认移除'));
+    await tester.pumpAndSettle();
+
+    expect(controller.lastAction, CandidateSourceAction.delete);
+    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+  });
+
+  testWidgets('a candidate from an uninstalled source has no action menu', (
+    tester,
+  ) async {
+    // installedSources 为空：候选仍会列出，但没有可操作的书源记录。
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+    expect(
+      find.byKey(const Key('source-candidate-menu-z-first')),
+      findsNothing,
+    );
   });
 }
