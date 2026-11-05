@@ -1430,10 +1430,18 @@ class AppController extends ChangeNotifier {
   ChangeSourceSettings get changeSourceSettings => _changeSourceSettings;
 
   /// Every group name declared by any installed source, sorted for the filter.
+  /// Every user-visible source group.
+  ///
+  /// Health verdicts are written into `bookSourceGroup` (legado does the same),
+  /// but they are not groups the user ever chose — offering `搜索失效` or
+  /// `校验超时` as a filter would let the user browse by brokenness and would
+  /// contradict the source rows, which already hide those tags.
   List<String> get sourceGroups {
     final groups = <String>{};
     for (final source in _sources) {
-      groups.addAll(source.groups);
+      groups.addAll(
+        source.groups.where((group) => !SourceHealthTag.isInvalid(group)),
+      );
     }
     final sorted = groups.toList()..sort();
     return List.unmodifiable(sorted);

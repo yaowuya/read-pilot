@@ -32,12 +32,13 @@ class ExploreKindRow extends StatefulWidget {
   final ValueChanged<ExploreKind> onButton;
   final void Function(ExploreKind kind, String value) onValueChanged;
 
-  /// 一行最多几个格子；legado 按屏宽取 2–4。
-  static int maxSpanFor(double width) {
-    if (width >= 620) return 4;
-    if (width >= 420) return 3;
-    return 2;
-  }
+  /// 一行最多几个格子。
+  ///
+  /// legado 的浏览模式和分类选择面板都写死 6（`ExploreViewModel.kt:312`、
+  /// `ExploreKindSelectSheet.kt:85`），没有按屏宽调整；没有声明样式的分类默认
+  /// 占 2 span，于是手机上一行正好三个格子。改成随屏宽收缩会让默认 span 等于
+  /// 整行，一屏只能看到几个分类。
+  static const int maxSpan = 6;
 
   @override
   State<ExploreKindRow> createState() => _ExploreKindRowState();
@@ -78,7 +79,7 @@ class _ExploreKindRowState extends State<ExploreKindRow> {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final maxSpan = ExploreKindRow.maxSpanFor(constraints.maxWidth);
+      const maxSpan = ExploreKindRow.maxSpan;
       const spacing = 10.0;
       final unit = (constraints.maxWidth - spacing * (maxSpan - 1)) / maxSpan;
       return Wrap(

@@ -401,6 +401,28 @@ void _manageGroup() {
     expect(find.text('2 个'), findsOneWidget);
   });
 
+  testWidgets('health tags never become group filters', (tester) async {
+    // 校验结论写进 bookSourceGroup（legado 也这么做），但它们不是用户选的分组：
+    // 让它们出现在筛选行里，等于允许用户按「坏掉了」浏览。
+    await _pumpManage(
+      tester,
+      sources: [
+        _manageJson(
+          url: 'https://a.example',
+          name: '甲书源',
+          group: '玄幻,搜索链接规则为空,校验超时',
+        ),
+        _manageJson(url: 'https://b.example', name: '乙书源', group: '都市,搜索失效'),
+      ],
+    );
+
+    expect(find.byKey(const Key('source-group-玄幻')), findsOneWidget);
+    expect(find.byKey(const Key('source-group-都市')), findsOneWidget);
+    expect(find.byKey(const Key('source-group-搜索链接规则为空')), findsNothing);
+    expect(find.byKey(const Key('source-group-校验超时')), findsNothing);
+    expect(find.byKey(const Key('source-group-搜索失效')), findsNothing);
+  });
+
   testWidgets('置顶 moves the chosen source above the others', (tester) async {
     final manage = await _pumpManage(
       tester,
