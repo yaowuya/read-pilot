@@ -4,6 +4,7 @@ import 'package:sembast/sembast.dart';
 
 import '../domain/book.dart';
 import '../domain/book_source.dart';
+import '../domain/change_source_settings.dart';
 import '../domain/explore_kind.dart';
 import '../domain/reader_settings.dart';
 import '../domain/reader_style_preset.dart';
@@ -720,6 +721,19 @@ class AppRepository {
 
   Future<void> saveSettings(ReaderSettings settings) async {
     await _meta.record('settings').put(database, settings.toJson());
+  }
+
+  Future<ChangeSourceSettings> changeSourceSettings() async =>
+      ChangeSourceSettings.fromJson(
+        Map<String, dynamic>.from(
+          await _meta.record('change_source_settings').get(database) ?? {},
+        ),
+      );
+
+  Future<void> saveChangeSourceSettings(ChangeSourceSettings settings) async {
+    await _meta
+        .record('change_source_settings')
+        .put(database, settings.toJson());
   }
 
   static String _stylePresetName(String value) {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book.dart';
+import '../../domain/change_source_settings.dart';
 import '../../domain/source_switch_candidate.dart';
 import '../theme.dart';
 import 'book_cover.dart';
@@ -35,6 +36,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
   bool _loading = true;
   bool _manualReload = false;
   bool _sortBySource = false;
+  late ChangeSourceSettings _settings;
   int _processed = 0;
   int _total = 0;
   int _pendingMetadata = 0;
@@ -42,6 +44,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
   @override
   void initState() {
     super.initState();
+    _settings = widget.controller.changeSourceSettings;
     unawaited(_restoreOrLoad());
   }
 
@@ -385,6 +388,21 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                           ),
                         ),
                       ),
+                      IconButton(
+                        key: const Key('source-switch-options'),
+                        tooltip: _settings.checkAuthor ? '已限定作者' : '搜索选项',
+                        onPressed: _switchingId == null ? _openOptions : null,
+                        icon: Icon(
+                          _settings.checkAuthor || _settings.sortByWordCount
+                              ? Icons.tune
+                              : Icons.tune_outlined,
+                          size: 20,
+                          color:
+                              _settings.checkAuthor || _settings.sortByWordCount
+                              ? AppColors.ink
+                              : AppColors.muted,
+                        ),
+                      ),
                       PopupMenuButton<bool>(
                         key: const Key('source-switch-sort'),
                         tooltip: '排序',
@@ -524,6 +542,67 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
   void _clearFilter() {
     _filter.clear();
     setState(() {});
+  }
+
+  /// 换源的搜索选项。Legado 把「限定作者」「加载字数」做成面板里的开关，
+  /// 这里只保留真正影响结果的两个：作者过滤和按字数排序。
+  Future<void> _openOptions() async {
+    // 草稿副本：直接改 [_settings] 会让关闭面板时也留下未保存的勾选状态。
+    var draft = _settings;
+    final updated = await showModalBottomSheet<ChangeSourceSettings>(
+      context: context,
+      backgroundColor: _paper,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('搜索选项', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  key: const Key('source-options-check-author'),
+                  contentPadding: EdgeInsets.zero,
+                  value: draft.checkAuthor,
+                  title: const Text('只保留同一作者'),
+                  subtitle: const Text('作者写法不同的书源会被排除'),
+                  onChanged: (value) => setSheetState(
+                    () => draft = draft.copyWith(checkAuthor: value),
+                  ),
+                ),
+                SwitchListTile(
+                  key: const Key('source-options-sort-word-count'),
+                  contentPadding: EdgeInsets.zero,
+                  value: draft.sortByWordCount,
+                  title: const Text('按字数排序'),
+                  subtitle: const Text('内容更完整的书源排在前面'),
+                  onChanged: (value) => setSheetState(
+                    () => draft = draft.copyWith(sortByWordCount: value),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton(
+                    key: const Key('source-options-done'),
+                    onPressed: () => Navigator.pop(context, draft),
+                    child: const Text('完成'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (updated == null || !mounted) return;
+    await widget.controller.updateChangeSourceSettings(updated);
+    setState(() => _settings = updated);
+    // 过滤条件变了就必须重搜：作者过滤发生在收集候选时，不能只重排现有列表。
+    await _reload();
   }
 
   String _candidateChapterDescription(SourceCandidateInfo? info) {

@@ -7,6 +7,7 @@ import '../data/app_repository.dart';
 import '../data/sample_catalog.dart';
 import '../domain/book.dart';
 import '../domain/book_source.dart';
+import '../domain/change_source_settings.dart';
 import '../domain/explore_kind.dart';
 import '../domain/reader_settings.dart';
 import '../domain/reader_style_preset.dart';
@@ -58,6 +59,7 @@ class AppController extends ChangeNotifier {
   Map<String, List<BookTextRule>> _textRules = {};
   final _textRulesRevisions = <String, int>{};
   ReaderSettings _settings = const ReaderSettings();
+  ChangeSourceSettings _changeSourceSettings = const ChangeSourceSettings();
   final _chapterLoads = <String, Future<Chapter>>{};
   final _cacheClears = <String>{};
   bool _disposed = false;
@@ -220,6 +222,7 @@ class AppController extends ChangeNotifier {
     _readerMarks = await repository.readerMarks();
     _readingActivities = await repository.readingActivities();
     _settings = await repository.settings();
+    _changeSourceSettings = await repository.changeSourceSettings();
     _readerStylePresets = await repository.readerStylePresets();
     _notify();
   }
@@ -918,6 +921,10 @@ class AppController extends ChangeNotifier {
     var aborted = false;
     final titleKey = _matchKey(current.title);
     final authorKey = _matchKey(current.author);
+    // Legado `ChangeSourceSettings.checkAuthor`：开启后只保留作者命中的候选，
+    // 避免把同名不同作者的书写进书架。默认关闭，因为各书源的作者写法差异很
+    // 大，强制过滤会漏掉可用候选。
+    final checkAuthor = _changeSourceSettings.checkAuthor;
     final sourceOrderById = {
       for (final entry in _sources.where((source) => source.enabled).indexed)
         entry.$2.id: entry.$1,
@@ -961,7 +968,8 @@ class AppController extends ChangeNotifier {
     }
 
     SourceCandidateSearchResult snapshot() {
-      final sorted = ready.values.toList()..sort(_compareCandidates);
+      final sorted = ready.values.toList()
+        ..sort((left, right) => _compareCandidates(left, right, infoById));
       return SourceCandidateSearchResult(
         sorted.map((item) => item.book),
         failedSources: failedSources,
@@ -1071,7 +1079,12 @@ class AppController extends ChangeNotifier {
           for (final candidate in group.books) {
             final resultOrder = candidateOrder++;
             if (!seen.add(candidate.id) ||
-                _matchKey(candidate.title) != titleKey ||
+                !_matchesCandidate(
+                  candidate,
+                  titleKey,
+                  authorKey,
+                  checkAuthor,
+                ) ||
                 !isEnabledAlternativeSource(candidate.sourceId)) {
               continue;
             }
@@ -1082,9 +1095,7 @@ class AppController extends ChangeNotifier {
             // read of every candidate catalog would delay the whole list.
             final item = (
               book: candidate,
-              authorMatch:
-                  authorKey.isNotEmpty &&
-                  _matchKey(candidate.author) == authorKey,
+              authorMatch: _authorMatches(candidate, authorKey),
               sourceOrder: sourceOrder,
               candidateOrder: resultOrder,
             );
@@ -1163,14 +1174,55 @@ class AppController extends ChangeNotifier {
   static int _chapterWordCount(Chapter chapter) =>
       chapter.paragraphs.join().replaceAll(RegExp(r'\s+'), '').runes.length;
 
-  static int _compareCandidates(
+  /// Whether [candidate] may be offered as a replacement for the current book.
+  ///
+  /// Legado matches the name exactly and, when `checkAuthor` is on, requires the
+  /// candidate's author to *contain* the current author
+  /// (`fName == name && (!checkAuthor || fAuthor.contains(author))` in
+  /// `ChangeSourceSearchUseCase.kt`). Containment rather than equality is what
+  /// tolerates "天蚕土豆" vs "天蚕土豆 著" across sources.
+  static bool _matchesCandidate(
+    Book candidate,
+    String titleKey,
+    String authorKey,
+    bool checkAuthor,
+  ) {
+    if (_matchKey(candidate.title) != titleKey) return false;
+    if (!checkAuthor || authorKey.isEmpty) return true;
+    return _authorMatches(candidate, authorKey);
+  }
+
+  static bool _authorMatches(Book candidate, String authorKey) =>
+      authorKey.isNotEmpty && _matchKey(candidate.author).contains(authorKey);
+
+  /// Orders candidates the way Legado's 换源列表 does.
+  ///
+  /// Author match always wins: a same-author source is the safer replacement.
+  /// When the word-count sort is on, richer content comes first — Legado sorts
+  /// by `chapterWordCount > 1000`, then the chapter number in the candidate's
+  /// summary, then the raw word count, and only then by configured source order
+  /// (`ChangeBookSourceComposeViewModel.kt`). Without it, source order decides.
+  int _compareCandidates(
     ({Book book, bool authorMatch, int sourceOrder, int candidateOrder}) left,
     ({Book book, bool authorMatch, int sourceOrder, int candidateOrder}) right,
+    Map<String, SourceCandidateInfo> infoById,
   ) {
     final author = (right.authorMatch ? 1 : 0).compareTo(
       left.authorMatch ? 1 : 0,
     );
     if (author != 0) return author;
+    if (_changeSourceSettings.sortByWordCount) {
+      final leftInfo = infoById[left.book.id];
+      final rightInfo = infoById[right.book.id];
+      final words = (rightInfo?.wordCount ?? 0).compareTo(
+        leftInfo?.wordCount ?? 0,
+      );
+      if (words != 0) return words;
+      final chapters = (rightInfo?.chapterCount ?? 0).compareTo(
+        leftInfo?.chapterCount ?? 0,
+      );
+      if (chapters != 0) return chapters;
+    }
     final source = left.sourceOrder.compareTo(right.sourceOrder);
     if (source != 0) return source;
     final candidate = left.candidateOrder.compareTo(right.candidateOrder);
@@ -1344,6 +1396,9 @@ class AppController extends ChangeNotifier {
       if (source.enabled && source.enabledExplore && source.hasExplore) source,
   ]);
 
+  /// 换源面板的搜索开关（作者过滤、按字数排序）。
+  ChangeSourceSettings get changeSourceSettings => _changeSourceSettings;
+
   /// Every group name declared by any installed source, sorted for the filter.
   List<String> get sourceGroups {
     final groups = <String>{};
@@ -1456,6 +1511,12 @@ class AppController extends ChangeNotifier {
   Future<void> updateSettings(ReaderSettings settings) async {
     await repository.saveSettings(settings);
     _settings = settings;
+    _notify();
+  }
+
+  Future<void> updateChangeSourceSettings(ChangeSourceSettings settings) async {
+    await repository.saveChangeSourceSettings(settings);
+    _changeSourceSettings = settings;
     _notify();
   }
 

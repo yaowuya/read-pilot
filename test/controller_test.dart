@@ -9,6 +9,7 @@ import 'package:read_pilot/application/app_controller.dart';
 import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
 import 'package:read_pilot/domain/book_source.dart';
+import 'package:read_pilot/domain/change_source_settings.dart';
 import 'package:read_pilot/domain/reader_settings.dart';
 import 'package:read_pilot/domain/source_import.dart';
 import 'package:read_pilot/domain/source_switch_candidate.dart';
@@ -55,6 +56,7 @@ class _SwitchSourceEngine extends SourceEngine {
   Future<void>? loadBookAbortTrigger;
   Future<void>? loadChapterAbortTrigger;
   final chapterRequests = <String>[];
+  final chaptersBySourceId = <String, Chapter>{};
 
   @override
   Future<List<Book>> search(
@@ -102,7 +104,9 @@ class _SwitchSourceEngine extends SourceEngine {
     if (source.id == delayedSourceId && delayedChapter != null) {
       return delayedChapter!.future;
     }
-    return loadedChapter ?? chapter.withParagraphs(const ['新正文']);
+    return chaptersBySourceId[source.id] ??
+        loadedChapter ??
+        chapter.withParagraphs(const ['新正文']);
   }
 
   @override
@@ -1698,6 +1702,106 @@ void main() {
       },
     );
   }
+
+  test('作者过滤只保留作者包含关系一致的候选', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+    );
+    const currentSource = 'https://source-0.example';
+    final current = _remoteBook(
+      id: 'author-current',
+      sourceId: currentSource,
+      sourceLabel: 'Source 0',
+      author: '天蚕土豆',
+    );
+    final sameAuthor = _remoteBook(
+      id: 'same-author',
+      sourceId: 'https://source-1.example',
+      sourceLabel: 'Source 1',
+      author: '天蚕土豆 著',
+    );
+    final otherAuthor = _remoteBook(
+      id: 'other-author',
+      sourceId: 'https://source-2.example',
+      sourceLabel: 'Source 2',
+      author: '另一作者',
+    );
+    engine.results['https://source-1.example'] = [sameAuthor];
+    engine.results['https://source-2.example'] = [otherAuthor];
+
+    // 默认关闭：同名不同作者也算候选，由用户自己判断。
+    final unfiltered = await controller.findSourceCandidatesFor(current);
+    expect(unfiltered.candidates.map((book) => book.id), [
+      'same-author',
+      'other-author',
+    ]);
+
+    await controller.updateChangeSourceSettings(
+      const ChangeSourceSettings(checkAuthor: true),
+    );
+    // Legado 用 contains 而非相等：各家书源会在作者后面加“著”之类的尾巴。
+    final filtered = await controller.findSourceCandidatesFor(current);
+    expect(filtered.candidates.map((book) => book.id), ['same-author']);
+  });
+
+  test('按字数排序把内容更完整的候选排在前面', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+    );
+    const currentSource = 'https://source-0.example';
+    final current = _remoteBook(
+      id: 'word-current',
+      sourceId: currentSource,
+      sourceLabel: 'Source 0',
+    );
+    final shortSource = _remoteBook(
+      id: 'short-candidate',
+      sourceId: 'https://source-1.example',
+      sourceLabel: 'Source 1',
+    );
+    final longSource = _remoteBook(
+      id: 'long-candidate',
+      sourceId: 'https://source-2.example',
+      sourceLabel: 'Source 2',
+    );
+    engine.results['https://source-1.example'] = [shortSource];
+    engine.results['https://source-2.example'] = [longSource];
+    engine.chaptersBySourceId['https://source-1.example'] = Chapter(
+      id: 'source-1/chapter',
+      title: '第一章',
+      url: 'source-1/chapter',
+      paragraphs: const ['短'],
+    );
+    engine.chaptersBySourceId['https://source-2.example'] = Chapter(
+      id: 'source-2/chapter',
+      title: '第一章',
+      url: 'source-2/chapter',
+      paragraphs: const ['这句话明显要长得多，足以让字数排序把这一行排到前面去。'],
+    );
+
+    // 默认按书源顺序，两个字数是 1 vs 25，但顺序仍由 origin 决定。
+    final ordered = await controller.findSourceCandidatesFor(current);
+    expect(ordered.candidates.first.id, 'short-candidate');
+    final shortWords = ordered.infoFor(shortSource)?.wordCount ?? 0;
+    final longWords = ordered.infoFor(longSource)?.wordCount ?? 0;
+    expect(shortWords, 1);
+    expect(longWords, greaterThan(shortWords));
+
+    // 打开字数排序后，内容更完整的那一本排到第一行。
+    await controller.updateChangeSourceSettings(
+      const ChangeSourceSettings(sortByWordCount: true),
+    );
+    final sorted = await controller.findSourceCandidatesFor(current);
+    expect(sorted.candidates.first.id, 'long-candidate');
+  });
 
   test('late chapter load cannot publish after a source switch', () async {
     controller.dispose();

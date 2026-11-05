@@ -561,6 +561,32 @@ void main() {
   );
 
   testWidgets(
+    'search options persist the author filter and refresh the candidates',
+    (tester) async {
+      await openSheet(tester, size: const Size(800, 2000));
+      await tester.pumpAndSettle();
+      final before = controller.reloads;
+
+      await tester.tap(find.byKey(const Key('source-switch-options')));
+      await tester.pumpAndSettle();
+      expect(find.text('搜索选项'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('source-options-check-author')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('source-options-sort-word-count')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('source-options-done')));
+      await tester.pumpAndSettle();
+
+      expect(controller.changeSourceSettings.checkAuthor, isTrue);
+      expect(controller.changeSourceSettings.sortByWordCount, isTrue);
+      // 作者过滤发生在收集候选时，所以改完必须重新搜一次而不是只重排列表。
+      expect(controller.reloads, before + 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'refresh requests new candidates and reports partial results honestly',
     (tester) async {
       await openSheet(tester);
