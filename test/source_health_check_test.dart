@@ -186,6 +186,9 @@ void main() {
       expect(stored.groups, contains(SourceHealthTag.siteFailed));
       expect(stored.cleanComment, isEmpty);
       expect(stored.comment, startsWith('// Error:'));
+      // 备注会显示在书源行的界面里，阶段名必须是界面上那个中文名字。
+      expect(stored.comment, contains('（搜索）'));
+      expect(stored.comment, isNot(contains('search')));
       expect(
         controller.sources.single.groups,
         contains(SourceHealthTag.searchFailed),

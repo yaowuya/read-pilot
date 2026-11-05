@@ -291,12 +291,7 @@ class _StageRow extends StatelessWidget {
   final SourceHealthStage stage;
   final SourceHealthResult? result;
 
-  String get _label => switch (stage) {
-    SourceHealthStage.search => '搜索',
-    SourceHealthStage.explore => '发现',
-    SourceHealthStage.catalog => '详情与目录',
-    SourceHealthStage.content => '正文',
-  };
+  String get _label => stage.label;
 
   @override
   Widget build(BuildContext context) {

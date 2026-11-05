@@ -4,7 +4,19 @@
 /// catalog and content of whatever candidate the first two produced; the stage
 /// list here keeps that order so a failure stops the later stages instead of
 /// hammering a host that just proved unreachable.
-enum SourceHealthStage { search, explore, catalog, content }
+enum SourceHealthStage {
+  search('搜索'),
+  explore('发现'),
+  catalog('详情与目录'),
+  content('正文');
+
+  const SourceHealthStage(this.label);
+
+  /// The stage name the reader sees. The comment written back to the source
+  /// ends up in the source list, next to the UI's own Chinese labels, so an
+  /// English enum name there would be the only English in the app.
+  final String label;
+}
 
 enum SourceHealthStatus { passed, skipped, failed, timedOut, cancelled }
 
@@ -116,7 +128,7 @@ final class SourceHealthReport {
   String? get failureSummary {
     for (final result in results) {
       if (!result.isFailure) continue;
-      return '${result.summary}（${result.stage.name}）';
+      return '${result.summary}（${result.stage.label}）';
     }
     return null;
   }
