@@ -197,9 +197,10 @@ class RuleInterpreter {
               query.absolute &&
               _matchesSelector(context, step.selector))
             context,
-          ...context
-              .querySelectorAll(step.selector)
-              .where((element) => step.descendant || element.parent == context),
+          ..._querySelectorAll(
+            context,
+            step.selector,
+          ).where((element) => step.descendant || element.parent == context),
         ];
         final position = step.position;
         if (position == null) {
@@ -218,15 +219,17 @@ class RuleInterpreter {
   static bool _matchesSelector(dom.Element element, String selector) {
     final parent = element.parent;
     if (parent != null) {
-      return parent
-          .querySelectorAll(selector)
-          .any((item) => identical(item, element));
+      return _querySelectorAll(
+        parent,
+        selector,
+      ).any((item) => identical(item, element));
     }
     final clone = element.clone(true);
     final wrapper = dom.Element.tag('div')..append(clone);
-    return wrapper
-        .querySelectorAll(selector)
-        .any((item) => identical(item, clone));
+    return _querySelectorAll(
+      wrapper,
+      selector,
+    ).any((item) => identical(item, clone));
   }
 
   static _XPathQuery _parseXPath(String rule) {
@@ -702,12 +705,16 @@ class RuleInterpreter {
     return picked;
   }
 
-  /// Runs a single CSS selector, turning parse failures into no matches.
+  /// Runs a single CSS selector, turning engine failures into no matches.
   ///
-  /// Sources in the wild contain selectors that no CSS engine accepts; the
-  /// fallback branch machinery in [select]/[extract] handles an empty result,
-  /// so containment here keeps such rules working instead of surfacing an
-  /// English parser error to the reader.
+  /// Sources in the wild contain selectors that no CSS engine accepts, and the
+  /// engine here rejects a good deal of standard CSS by throwing
+  /// [UnimplementedError] rather than [FormatException] (`package:html` has no
+  /// `:nth-of-type`, `:not(...)` of a selector list, `:has`, …). Both are the
+  /// same thing to a reader: this selector matched nothing. The fallback branch
+  /// machinery in [select]/[extract] handles an empty result, so containment
+  /// here keeps such rules working instead of surfacing an English parser error
+  /// as if the site were broken.
   static List<dom.Element> _querySelectorAll(
     dom.Element root,
     String selector,
@@ -715,7 +722,9 @@ class RuleInterpreter {
     if (selector.isEmpty) return <dom.Element>[root];
     try {
       return root.querySelectorAll(selector);
-    } on FormatException {
+    } on Exception {
+      return const <dom.Element>[];
+    } on Error {
       return const <dom.Element>[];
     }
   }

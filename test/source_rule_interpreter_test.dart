@@ -64,6 +64,32 @@ void main() {
     expect(interpreter.extract(books.first, '@CSS:a@html'), contains('<a'));
   });
 
+  test('a selector the engine cannot parse matches nothing', () {
+    // package:html throws UnimplementedError (an Error, not an Exception) for
+    // a good deal of standard CSS — `:nth-of-type`, `:not(...)` of a selector
+    // list, `:has`. Real书源 use them, and letting the error escape turned a
+    // selector the engine simply cannot run into "网站失效" on the source and a
+    // `// Error:` note in its comment.
+    final root = RuleNode.html(
+      html
+          .parse('<div><p class="a">一</p><p class="a">二</p></div>')
+          .documentElement!,
+    );
+    const interpreter = RuleInterpreter();
+
+    expect(
+      () => interpreter.select(root, '@CSS:p:nth-of-type(2)'),
+      returnsNormally,
+    );
+    expect(interpreter.select(root, '@CSS:p:nth-of-type(2)'), isEmpty);
+    expect(interpreter.extractFirst(root, '@CSS:p:nth-of-type(2)@text'), '');
+    // A later fallback branch still wins, which is the whole point.
+    expect(
+      interpreter.extract(root, '@CSS:p:nth-of-type(2)@text||@CSS:.a@text'),
+      '一\n二',
+    );
+  });
+
   test('interpreter uses the first non-empty fallback branch', () {
     final root = RuleNode.html(
       html.parse('<div><h1 class="title">月下读书</h1></div>').documentElement!,
