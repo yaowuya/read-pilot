@@ -210,6 +210,50 @@ void main() {
     },
   );
 
+  test(
+    'sources sort by customOrder and treat a missing value as zero',
+    () async {
+      final importer = SourceImporter();
+      final preview = SourceImportPreview(
+        sources: importer.parse(
+          jsonEncode([
+            _sourceJson(origin: 'https://jia.example', name: '甲'),
+            _sourceJson(origin: 'https://yi.example', name: '乙'),
+            _sourceJson(origin: 'https://bing.example', name: '丙'),
+          ]),
+        ),
+        provenance: const SourceImportProvenance(
+          kind: SourceImportKind.text,
+          responseBytes: 512,
+        ),
+      );
+      await repository.commitSourceImport(preview);
+      final initial = (await repository.sources())
+          .map((source) => source.name)
+          .toList();
+      expect(initial, hasLength(3));
+
+      // 导入的 JSON 没有 customOrder 键，所有书源都算 0；置顶写进去的 -1 必须排到
+      // 最前面，而不是像 sembast 的 SortOrder 那样因为缺字段而落到末尾。
+      await repository.moveSourceToTop('https://bing.example');
+      final afterTop = (await repository.sources()).toList();
+      expect(afterTop.first.name, '丙');
+      expect(afterTop.first.customOrder, lessThan(0));
+      expect(
+        afterTop.skip(1).map((source) => source.name),
+        initial.where((name) => name != '丙'),
+        reason: '置顶不应该打乱其他书源的相对次序',
+      );
+
+      // 显式写更小的 customOrder 也排到更前面。
+      final yi = afterTop.firstWhere(
+        (source) => source.id == 'https://yi.example',
+      );
+      await repository.saveSources([yi.withCustomOrder(-5)]);
+      expect((await repository.sources()).first.name, '乙');
+    },
+  );
+
   test('source import selection controls records and sidecar state', () async {
     final importer = SourceImporter();
     final preview = SourceImportPreview(

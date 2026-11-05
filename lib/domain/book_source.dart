@@ -1,29 +1,24 @@
-import 'dart:convert';
-
+import 'explore_kind.dart';
 import 'source_capability.dart';
 import 'source_definition.dart';
 
+/// One openable discover category.
+///
+/// Kept as the flat title/url pair the search page, health check, and controller
+/// already pass around; [ExploreKindSet] remains the richer representation.
 class SourceExploreEntry {
   const SourceExploreEntry({required this.title, required this.url});
 
   final String title;
   final String url;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SourceExploreEntry && other.title == title && other.url == url;
+
+  @override
+  int get hashCode => Object.hash(title, url);
 }
-
-/// Whole-value script markers mirrored from legado's `exploreKinds`:
-/// such `exploreUrl` values need a JS runtime this app does not ship, so they
-/// yield no static explore entries at all instead of junk fragments.
-final RegExp _scriptExploreUrl = RegExp(
-  r'^\s*(?:@js:|@webjs:|<js>|<webjs>)',
-  caseSensitive: false,
-);
-
-/// Splits the legacy `标题::地址` list the same way legado does: on newlines
-/// and the literal `&&` separator.
-final RegExp _legacyExploreSeparator = RegExp(r'(?:&&|[\r\n])+');
-
-/// Cap on explore entries per source, matching the previous behaviour.
-const int _maxExploreEntries = 200;
 
 /// Persisted source facade used by the existing controller and repository.
 ///
@@ -51,83 +46,37 @@ class BookSource {
   Map<String, String> get tocRules => _rules('ruleToc');
   Map<String, String> get contentRules => _rules('ruleContent');
 
-  List<SourceExploreEntry> get exploreEntries {
-    final value = definition.exploreUrl;
-    if (value == null || value.isEmpty) return const [];
-    if (_scriptExploreUrl.hasMatch(value)) return const [];
-    final entries = <SourceExploreEntry>[];
-    final seen = <String>{};
+  /// Raw `bookSourceGroup` value, e.g. `玄幻,都市`.
+  String get group => definition.group ?? '';
 
-    void add(String title, String url) {
-      if (entries.length >= _maxExploreEntries) return;
-      final trimmedUrl = url.trim();
-      final trimmedTitle = title.trim();
-      if (!_isUsableExploreUrl(trimmedUrl)) return;
-      final resolvedTitle = trimmedTitle.isEmpty ? name : trimmedTitle;
-      if (resolvedTitle.isEmpty) return;
-      // Keyed widgets and the category id both build from (title, url), so a
-      // duplicate pair would crash the discover page's Wrap.
-      if (!seen.add('$resolvedTitle\u{0}$trimmedUrl')) return;
-      entries.add(SourceExploreEntry(title: resolvedTitle, url: trimmedUrl));
-    }
+  /// Group names derived by [splitSourceGroups].
+  List<String> get groups => definition.groups;
 
-    final trimmed = value.trim();
-    if (trimmed.startsWith('[')) {
-      final decoded = _tryDecodeJsonEntries(trimmed);
-      if (decoded != null) {
-        for (final entry in decoded) {
-          add(entry.$1, entry.$2);
-        }
-        return List.unmodifiable(entries);
-      }
-    }
-    for (final rawLine in value.split(_legacyExploreSeparator)) {
-      final line = rawLine.trim();
-      if (line.isEmpty) continue;
-      final separator = line.indexOf('::');
-      if (separator > 0) {
-        add(line.substring(0, separator), line.substring(separator + 2));
-      } else {
-        add('', line);
-      }
-    }
-    return List.unmodifiable(entries);
-  }
+  /// Whether this source contributes categories to the discover page.
+  bool get enabledExplore => definition.enabledExplore;
 
-  /// Decodes the JSON-array `exploreUrl` form legado supports, e.g.
-  /// `[{"title":"玄幻","url":"/sort/1/{{page}}.html"}, ...]` (pretty-printed
-  /// or single-line). Returns null when the value is not a decodable array.
-  static List<(String, String)>? _tryDecodeJsonEntries(String value) {
-    final dynamic decoded;
-    try {
-      decoded = jsonDecode(value);
-    } on FormatException {
-      return null;
-    }
-    if (decoded is! List) return null;
-    final result = <(String, String)>[];
-    for (final item in decoded) {
-      if (item is! Map) continue;
-      final title = item['title'];
-      final url = item['url'];
-      result.add((title is String ? title : '', url is String ? url : ''));
-    }
-    return result;
-  }
+  String get comment => definition.comment ?? '';
 
-  /// A usable explore URL is an absolute http(s) URL or a site-relative path.
-  /// Bare fragments of shredded scripts or JSON (`}`, `});`, `[`,
-  /// `{"title": ...`) are rejected so they can never surface as categories.
-  static bool _isUsableExploreUrl(String url) {
-    if (url.isEmpty) return false;
-    if (url.startsWith('http://') || url.startsWith('https://')) return true;
-    if (url.startsWith('/')) return true;
-    // Relative path: after removing {{...}} template placeholders there must
-    // be no JSON punctuation, quoting, or whitespace left.
-    final stripped = url.replaceAll(RegExp(r'\{\{[^{}]*\}\}'), '');
-    if (stripped.isEmpty) return true;
-    return !RegExp(r'''[\s{}[\]"',;()\\]''').hasMatch(stripped);
-  }
+  /// Legado's `customOrder`; lower sorts first and `0` is the default order.
+  int get customOrder => definition.customOrder;
+
+  /// Whether the source declares any discover workflow at all.
+  bool get hasExplore =>
+      (definition.exploreUrl ?? '').trim().isNotEmpty ||
+      exploreRules.isNotEmpty;
+
+  /// Discover categories parsed from `exploreUrl`.
+  ///
+  /// A script-generated `exploreUrl` reports [ExploreKindSet.unsupportedReason]
+  /// instead of claiming the source has no categories.
+  ExploreKindSet get exploreKindSet =>
+      parseExploreKinds(definition.exploreUrl, sourceName: name);
+
+  /// The legacy flat view of [exploreKindSet]: only openable categories.
+  List<SourceExploreEntry> get exploreEntries => [
+    for (final kind in exploreKindSet.loadableKinds)
+      SourceExploreEntry(title: kind.title, url: kind.url!),
+  ];
 
   Map<String, String> _rules(String key) => {
     for (final entry in definition.rules(key).entries)
@@ -138,8 +87,50 @@ class BookSource {
   SourceCapabilityReport capabilitiesFor(SourceRuntimeProfile profile) =>
       definition.capabilitiesFor(profile);
 
-  BookSource withEnabled(bool enabled) =>
-      BookSource({...toJson(), 'enabled': enabled});
+  /// Returns a copy with individual raw fields replaced.
+  ///
+  /// Every mutation goes through raw JSON so unknown legado fields the user
+  /// imported keep surviving the round trip.
+  BookSource withFields(Map<String, Object?> fields) {
+    final json = toJson();
+    for (final entry in fields.entries) {
+      if (entry.value == null) {
+        json.remove(entry.key);
+      } else {
+        json[entry.key] = entry.value;
+      }
+    }
+    return BookSource(json);
+  }
+
+  BookSource withEnabled(bool enabled) => withFields({'enabled': enabled});
+
+  BookSource withEnabledExplore(bool enabledExplore) =>
+      withFields({'enabledExplore': enabledExplore});
+
+  /// Replaces the group membership list, writing the joined
+  /// `bookSourceGroup` form legado expects.
+  BookSource withGroups(List<String> groups) {
+    final normalized = <String>[];
+    final seen = <String>{};
+    for (final group in groups) {
+      final name = group.trim();
+      if (name.isEmpty || !seen.add(name)) continue;
+      normalized.add(name);
+    }
+    return withFields({
+      'bookSourceGroup': normalized.isEmpty ? null : normalized.join(','),
+    });
+  }
+
+  BookSource withCustomOrder(int order) => withFields({'customOrder': order});
+
+  BookSource withComment(String comment) => withFields({
+    'bookSourceComment': comment.trim().isEmpty ? null : comment,
+  });
+
+  BookSource withName(String name) =>
+      withFields({'bookSourceName': name.trim()});
 
   Map<String, dynamic> toJson() => definition.toJson();
 }

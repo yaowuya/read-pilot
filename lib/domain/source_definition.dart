@@ -69,6 +69,25 @@ const _hopByHopHeaders = {
 
 const _coreProfiles = {'native-core', 'android-core', 'web-core'};
 
+/// Splits `bookSourceGroup` exactly as legado's
+/// `AppPattern.splitGroupRegex = Regex("[,;，；]")` does: commas and semicolons,
+/// half-width or full-width, with surrounding blanks dropped and duplicates
+/// collapsed in first-seen order.
+final RegExp _groupSeparator = RegExp(r'[,;，；]');
+
+List<String> splitSourceGroups(String? value) {
+  if (value == null || value.trim().isEmpty) return const <String>[];
+  final groups = <String>[];
+  final seen = <String>{};
+  for (final part in value.split(_groupSeparator)) {
+    final name = part.trim();
+    if (name.isEmpty) continue;
+    if (!seen.add(name)) continue;
+    groups.add(name);
+  }
+  return List.unmodifiable(groups);
+}
+
 /// Immutable, raw-preserving representation of one imported source definition.
 ///
 /// Construction validates only format and transport-safe static headers. It does
@@ -82,6 +101,10 @@ class SourceDefinition {
     required this.enabled,
     required this.searchUrl,
     required this.exploreUrl,
+    required this.group,
+    required this.enabledExplore,
+    required this.comment,
+    required this.customOrder,
     required Map<String, String> staticHeaders,
     required Map<String, Map<String, dynamic>> ruleSets,
     required List<SourceCapabilityRequirement> requirements,
@@ -125,6 +148,20 @@ class SourceDefinition {
     if (exploreValue != null && exploreValue is! String) {
       throw const FormatException('exploreUrl 必须是字符串。');
     }
+    final groupValue = rawJson['bookSourceGroup'];
+    if (groupValue != null && groupValue is! String) {
+      throw const FormatException('bookSourceGroup 必须是字符串。');
+    }
+    final enabledExploreValue = rawJson['enabledExplore'] ?? true;
+    if (enabledExploreValue is! bool &&
+        enabledExploreValue != 0 &&
+        enabledExploreValue != 1) {
+      throw const FormatException('enabledExplore 必须是布尔值。');
+    }
+    final commentValue = rawJson['bookSourceComment'];
+    if (commentValue != null && commentValue is! String) {
+      throw const FormatException('bookSourceComment 必须是字符串。');
+    }
 
     final requirements = <SourceCapabilityRequirement>[];
     final staticHeaders = _parseHeaders(rawJson['header'], requirements);
@@ -148,10 +185,23 @@ class SourceDefinition {
       enabled: enabledValue,
       searchUrl: (searchValue as String?)?.trim(),
       exploreUrl: (exploreValue as String?)?.trim(),
+      group: (groupValue as String?)?.trim(),
+      enabledExplore: enabledExploreValue == true || enabledExploreValue == 1,
+      comment: (commentValue as String?)?.trim(),
+      customOrder: _parseOrder(rawJson['customOrder']),
       staticHeaders: staticHeaders,
       ruleSets: ruleSets,
       requirements: requirements,
     );
+  }
+
+  /// Legado stores ordering as either a number or a numeric string, and an
+  /// unparseable value falls back to `0` (the default order) rather than
+  /// rejecting an otherwise usable source.
+  static int _parseOrder(dynamic value) {
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim()) ?? 0;
+    return 0;
   }
 
   final Map<String, dynamic> _rawJson;
@@ -164,7 +214,26 @@ class SourceDefinition {
   final bool enabled;
   final String? searchUrl;
   final String? exploreUrl;
+
+  /// Raw `bookSourceGroup` text, e.g. `玄幻,都市`. Legado keeps group membership
+  /// on the source itself and derives the group list by splitting every source's
+  /// value, so this stays a string rather than a relation.
+  final String? group;
+
+  /// Whether the source takes part in the discover page. Legado separates this
+  /// from [enabled], which governs search and 换源.
+  final bool enabledExplore;
+
+  final String? comment;
+
+  /// Legado's `customOrder`: lower sorts first, and `0` means "default order".
+  final int customOrder;
+
   final Map<String, String> staticHeaders;
+
+  /// Group names after splitting [group] the way legado does, in declaration
+  /// order and without duplicates.
+  List<String> get groups => splitSourceGroups(group);
 
   Set<SourceCapability> get requiredCapabilities => Set.unmodifiable(
     _requirements.map((requirement) => requirement.capability),

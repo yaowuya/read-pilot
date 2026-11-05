@@ -4,18 +4,27 @@ import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book.dart';
-import '../../domain/search_merge.dart';
+import '../../domain/book_source.dart';
+import '../../domain/explore_kind.dart';
 import '../components/book_cover.dart';
 import '../components/common.dart';
+import '../components/explore_kind_row.dart';
+import '../components/discover_search_sheet.dart';
 import '../theme.dart';
 
 /// 圆形图标按钮的底片。
 const _circleFill = Color(0xFFF0F1F4);
 
-/// 结果行右侧来源数徽章。
-const _badgeFill = Color(0xFFEDEFF2);
+/// 一页发现书籍列表最多展示多少本，和 legado 的榜单首页一致。
+const _pageBookLimit = 60;
 
-/// 搜索页：跨书源合并后的结果 + 本地公版书库。
+/// 发现页，对齐 legado 的发现页。
+///
+/// 两种模式，由右上角的切换按钮切换，并且记住用户上次的选择：
+///  * 浏览模式（[ExploreMode.browse]）：一条书源一节，每节里排开它自己声明的
+///    发现分类；上下滚动就能逛完所有书源，点分类进入该分类的书籍列表。
+///  * 内容模式（[ExploreMode.content]）：一次只看一条书源，顶部是分类标签栏
+///    加横向翻页，切书源时保留各自上次看的分页。
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({
     super.key,
@@ -28,644 +37,689 @@ class DiscoverScreen extends StatefulWidget {
   final AppController controller;
   final ValueChanged<Book> onDetails;
   final VoidCallback onSources;
-
-  /// 顶栏圆形返回按钮；为空时不渲染该按钮。
   final VoidCallback? onBack;
 
   @override
   State<DiscoverScreen> createState() => _DiscoverScreenState();
 }
 
-class _DiscoverScreenState extends State<DiscoverScreen> {
-  static const _categories = ['全部', '文学', '诗词', '哲思'];
+enum ExploreMode { browse, content }
 
-  final _query = TextEditingController();
-  String _category = '全部';
-  String _submitted = '';
-  SourceExploreCategory? _activeExplore;
-  List<SourceSearchGroup> _remote = [];
-  bool _searching = false;
-  bool _loadingMore = false;
-  bool _hasMore = false;
-  bool _cancelledSearch = false;
-  bool _exactMatch = false;
-  bool _shelfOnly = false;
-  int _page = 0;
-  int _generation = 0;
-  int _processed = 0;
-  int _total = 0;
-  Completer<void>? _abort;
+class _DiscoverScreenState extends State<DiscoverScreen> {
+  ExploreMainSelection _selection = const ExploreMainSelection();
+  ExploreMode _mode = ExploreMode.browse;
+  String? _group;
+
+  /// 每条书源的发现分类；脚本生成的分类会有 [ExploreKindSet.unsupportedReason]。
+  final _kindsBySource = <String, ExploreKindSet>{};
+  final _infoBySource = <String, Map<String, String>>{};
+
+  /// 当前打开的分类列表（浏览模式点分类、内容模式下也用它）。
+  _ExplorePage? _page;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadSelection());
+  }
 
   @override
   void dispose() {
-    if (!(_abort?.isCompleted ?? true)) _abort!.complete();
-    _query.dispose();
+    if (!(_page?.abort.isCompleted ?? true)) _page!.abort.complete();
     super.dispose();
   }
 
-  Future<void> _search({bool loadMore = false}) async {
-    if (loadMore && (_searching || _loadingMore || !_hasMore || _page >= 10)) {
-      return;
+  Future<void> _loadSelection() async {
+    final selection = await widget.controller.exploreSelection();
+    final info = <String, Map<String, String>>{};
+    for (final source in widget.controller.exploreSources) {
+      info[source.id] = await widget.controller.sourceExploreInfo(source.id);
     }
-    final query = loadMore ? _submitted : _query.text.trim();
-    if (!(_abort?.isCompleted ?? true)) _abort!.complete();
-    final generation = loadMore ? _generation : ++_generation;
-    final page = loadMore ? _page + 1 : 1;
-    final abort = Completer<void>();
+    if (!mounted) return;
     setState(() {
-      if (loadMore) {
-        _loadingMore = true;
-      } else {
-        _submitted = query;
-        _activeExplore = null;
-        _searching = query.isNotEmpty;
-        _loadingMore = false;
-        _cancelledSearch = false;
-        _remote = [];
-        _page = 0;
-        _hasMore = false;
-      }
-      _processed = 0;
-      _total = 0;
-      _abort = query.isEmpty ? null : abort;
+      _selection = selection;
+      _mode = selection.showContent ? ExploreMode.content : ExploreMode.browse;
+      _infoBySource.addAll(info);
+      _computeKinds();
     });
-    if (query.isEmpty) return;
-    final results = await widget.controller.searchSources(
-      query,
-      page: page,
-      abortTrigger: abort.future,
-      onProgress: (processed, total) {
-        if (!mounted || generation != _generation) return;
-        setState(() {
-          _processed = processed;
-          _total = total;
-        });
-      },
-      // 边搜索边显示：每个书源一返回就并入结果列表。
-      onResult: (group, processed, total) {
-        if (!mounted || generation != _generation) return;
-        setState(() {
-          _processed = processed;
-          _total = total;
-          _remote = loadMore
-              ? _mergeResults(_remote, [group])
-              : [
-                  ..._remote.where((item) => item.source.id != group.source.id),
-                  group,
-                ];
-        });
-      },
-    );
-    if (mounted && generation == _generation) {
-      setState(() {
-        _searching = false;
-        _loadingMore = false;
-        _remote = loadMore ? _mergeResults(_remote, results) : results;
-        _page = page;
-        _hasMore =
-            page < 10 &&
-            results.any(
-              (group) => group.error == null && group.books.isNotEmpty,
-            );
-        _processed = _total;
-        _abort = null;
-      });
+  }
+
+  void _computeKinds() {
+    _kindsBySource.clear();
+    for (final source in widget.controller.exploreSources) {
+      _kindsBySource[source.id] = source.exploreKindSet;
     }
   }
 
-  Future<void> _explore(
-    SourceExploreCategory category, {
-    bool loadMore = false,
+  Future<void> _persistSelection(ExploreMainSelection next) async {
+    setState(() => _selection = next);
+    await widget.controller.saveExploreSelection(next);
+  }
+
+  Future<void> _setMode(ExploreMode mode) async {
+    setState(() => _mode = mode);
+    await _persistSelection(
+      _selection.withShowContent(mode == ExploreMode.content),
+    );
+  }
+
+  Future<void> _setSource(String sourceUrl) async {
+    setState(() => _selection = _selection.withSource(sourceUrl));
+    await widget.controller.saveExploreSelection(_selection);
+    final source = _sourceFor(sourceUrl);
+    if (source == null) return;
+    final kinds = _kindsBySource[source.id] ?? const ExploreKindSet.empty();
+    final loadable = loadableExploreKinds(kinds.kinds);
+    if (loadable.isEmpty) {
+      setState(() => _page = null);
+      return;
+    }
+    final saved = _selection.kindKeyFor(source.id);
+    final kind = loadable.firstWhere(
+      (item) => item.key == saved,
+      orElse: () => loadable.first,
+    );
+    await _openKind(source, kind, keepMode: true);
+  }
+
+  Future<void> _setKind(String sourceUrl, ExploreKind kind) async {
+    await _persistSelection(_selection.withKind(sourceUrl, kind.key));
+    final source = _sourceFor(sourceUrl);
+    if (source == null) return;
+    await _openKind(source, kind, keepMode: true);
+  }
+
+  BookSource? _sourceFor(String? url) {
+    for (final source in widget.controller.exploreSources) {
+      if (source.id == url) return source;
+    }
+    return null;
+  }
+
+  Future<void> _onKindValue(
+    BookSource source,
+    ExploreKind kind,
+    String value,
+  ) async {
+    final values = Map<String, String>.from(
+      _infoBySource[source.id] ?? const {},
+    );
+    values[kind.title] = value;
+    setState(() => _infoBySource[source.id] = values);
+    await widget.controller.saveSourceExploreInfo(source.id, values);
+    // 只改取值不自动发请求：legado 也是点分类时才带上当前取值。
+    if (kind.type == ExploreKindType.select ||
+        kind.type == ExploreKindType.toggle) {
+      final page = _page;
+      if (page != null &&
+          page.source.id == source.id &&
+          page.kind.title == kind.title) {
+        await _loadPage(page, page.page);
+      }
+    }
+  }
+
+  Future<void> _onKindButton(BookSource source, ExploreKind kind) async {
+    if (kind.isError) {
+      showMessage(context, '这条书源的发现分类规则解析失败。');
+      return;
+    }
+    // legado 的 button 类执行书源声明的动作；当前运行时没有脚本能力，
+    // 因此明确告诉用户这条分类需要在支持脚本的客户端里执行。
+    showMessage(context, '“${kind.title}”需要在支持脚本的书源客户端里执行。');
+  }
+
+  Future<void> _openKind(
+    BookSource source,
+    ExploreKind kind, {
+    bool keepMode = false,
   }) async {
-    if (loadMore && (_searching || _loadingMore || !_hasMore || _page >= 10)) {
-      return;
-    }
-    if (!(_abort?.isCompleted ?? true)) _abort!.complete();
-    final generation = loadMore ? _generation : ++_generation;
-    final page = loadMore ? _page + 1 : 1;
-    final abort = Completer<void>();
+    if (!(_page?.abort.isCompleted ?? true)) _page!.abort.complete();
+    final page = _ExplorePage(source: source, kind: kind);
+    setState(() => _page = page);
+    await _loadPage(page, 1);
+  }
+
+  Future<void> _loadPage(_ExplorePage page, int number) async {
+    if (page.loading && number == page.page) return;
+    final generation = page.generation;
     setState(() {
-      if (loadMore) {
-        _loadingMore = true;
-      } else {
-        _submitted = '';
-        _activeExplore = category;
-        _searching = true;
-        _cancelledSearch = false;
-        _remote = [];
-        _page = 0;
-        _hasMore = false;
-        _query.clear();
-      }
-      _processed = 0;
-      _total = 1;
-      _abort = abort;
+      page.loading = true;
+      page.error = null;
+      page.page = number;
     });
-    final result = await widget.controller.exploreSource(
-      category,
-      page: page,
-      abortTrigger: abort.future,
+    final previous = page.abort;
+    page.abort = Completer<void>();
+    if (!previous.isCompleted) previous.complete();
+    final group = await widget.controller.exploreKind(
+      page.source,
+      page.kind,
+      page: number,
+      abortTrigger: page.abort.future,
     );
-    if (mounted && generation == _generation) {
-      setState(() {
-        _searching = false;
-        _loadingMore = false;
-        final results = [result];
-        _remote = loadMore ? _mergeResults(_remote, results) : results;
-        _page = page;
-        _hasMore = page < 10 && result.error == null && result.books.isNotEmpty;
-        _processed = _total;
-        _abort = null;
-      });
-    }
-  }
-
-  void _loadMore() {
-    final category = _activeExplore;
-    if (category == null) {
-      _search(loadMore: true);
-    } else {
-      _explore(category, loadMore: true);
-    }
-  }
-
-  List<SourceSearchGroup> _mergeResults(
-    List<SourceSearchGroup> current,
-    List<SourceSearchGroup> next,
-  ) {
-    final merged = {for (final group in current) group.source.id: group};
-    for (final group in next) {
-      final existing = merged[group.source.id];
-      if (existing == null) {
-        merged[group.source.id] = group;
-        continue;
-      }
-      final books = {
-        for (final book in existing.books) book.id: book,
-        for (final book in group.books) book.id: book,
-      }.values.toList();
-      merged[group.source.id] = SourceSearchGroup(
-        group.source,
-        books,
-        error: books.isEmpty ? group.error ?? existing.error : null,
-      );
-    }
-    return merged.values.toList();
-  }
-
-  void _cancelSearch() {
-    if (!(_abort?.isCompleted ?? true)) _abort!.complete();
-    _generation++;
+    if (!mounted || page.generation != generation) return;
     setState(() {
-      _searching = false;
-      _loadingMore = false;
-      _cancelledSearch = true;
-      _processed = 0;
-      _total = 0;
-      _abort = null;
+      page.loading = false;
+      page.error = group.error;
+      page.books = number == 1
+          ? group.books
+          : [
+              ...page.books,
+              for (final book in group.books)
+                if (!page.books.any((item) => item.id == book.id)) book,
+            ];
+      page.hasMore = group.error == null && group.books.isNotEmpty;
     });
   }
 
-  void _retry() {
-    final category = _activeExplore;
-    if (category == null) {
-      _search();
-    } else {
-      _explore(category);
-    }
+  Future<void> _closePage() async {
+    if (!(_page?.abort.isCompleted ?? true)) _page!.abort.complete();
+    setState(() => _page = null);
   }
 
-  /// 结果胶囊文案：分类浏览只报结果数，关键词搜索再加查询进度。
-  String _progressLabel(int count) {
-    if (_activeExplore != null || _total <= 0) return '结果 $count';
-    final done = _processed < 0
-        ? 0
-        : (_processed > _total ? _total : _processed);
-    return '结果 $count · 进度 $done/$_total';
-  }
-
-  Future<void> _openFilters() async {
-    final selection = await showModalBottomSheet<_FilterSelection>(
+  Future<void> _openSearch() async {
+    final source = _sourceFor(_selection.sourceUrl);
+    final books = await showModalBottomSheet<List<Book>>(
       context: context,
+      isScrollControlled: true,
       showDragHandle: true,
       backgroundColor: Colors.white,
-      builder: (context) => _FilterSheet(
-        initialCategory: _category,
-        initialShelfOnly: _shelfOnly,
-      ),
+      constraints: const BoxConstraints(maxWidth: 640),
+      builder: (_) =>
+          DiscoverSearchSheet(controller: widget.controller, source: source),
     );
-    if (selection == null || !mounted) return;
-    setState(() {
-      _category = selection.category;
-      _shelfOnly = selection.shelfOnly;
-    });
-  }
-
-  /// 跨书源合并后的结果行；精确匹配开启时只保留完全命中的书名/作者。
-  List<MergedBookResult> _mergedResults() {
-    if (_remote.isEmpty) return const [];
-    final merged = mergeSearchResults([
-      for (final group in _remote) (source: group.source, books: group.books),
-    ], keyword: _activeExplore == null ? _submitted : '');
-    final wanted = _submitted.trim().toLowerCase();
-    if (!_exactMatch || wanted.isEmpty) return merged;
-    return [
-      for (final result in merged)
-        if (result.primary.title.trim().toLowerCase() == wanted ||
-            result.primary.author.trim().toLowerCase() == wanted)
-          result,
-    ];
-  }
-
-  List<Book> _catalogBooks() {
-    final keyword = _submitted.trim();
-    return widget.controller.catalog.where((book) {
-      if (_category != '全部' && book.category != _category) return false;
-      if (_shelfOnly && widget.controller.book(book.id) == null) {
-        return false;
-      }
-      if (keyword.isEmpty) return true;
-      return '${book.title}${book.author}'.contains(keyword);
-    }).toList();
+    if (books == null || !mounted) return;
+    for (final book in books) {
+      widget.onDetails(book);
+    }
   }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 650;
-      final busy = _searching || _loadingMore;
-      final showingRemote = _submitted.isNotEmpty || _activeExplore != null;
-      final results = _mergedResults();
-      final catalog = _catalogBooks();
-      final failed = _remote.where((group) => group.error != null).toList();
-      final explored = _activeExplore;
-      return ListView(
-        padding: EdgeInsets.fromLTRB(
-          compact ? 16 : 32,
-          compact ? 10 : 24,
-          compact ? 16 : 32,
-          28,
-        ),
+      final page = _page;
+      final sources = widget.controller.exploreSourcesInGroup(_group);
+      final showingPage = page != null;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              if (widget.onBack != null)
-                _CircleButton(
-                  key: const Key('discover-back'),
-                  icon: Icons.arrow_back,
-                  tooltip: '返回书架',
-                  onPress: widget.onBack,
-                ),
-              const Spacer(),
-              _CircleButton(
-                key: const Key('discover-sources'),
-                icon: Icons.settings_outlined,
-                tooltip: '管理书源',
-                onPress: widget.onSources,
-              ),
-              const SizedBox(width: 10),
-              _CircleButton(
-                key: const Key('discover-exact'),
-                icon: Icons.adjust,
-                tooltip: _exactMatch ? '关闭精确匹配' : '精确匹配书名或作者',
-                active: _exactMatch,
-                onPress: () => setState(() => _exactMatch = !_exactMatch),
-              ),
-              const SizedBox(width: 10),
-              _CircleButton(
-                key: const Key('discover-filter'),
-                icon: Icons.filter_alt_outlined,
-                tooltip: '筛选',
-                active: _category != '全部' || _shelfOnly,
-                onPress: _openFilters,
-              ),
-            ],
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              compact ? 16 : 32,
+              compact ? 10 : 24,
+              compact ? 16 : 32,
+              0,
+            ),
+            child: _buildHeader(showingPage, compact),
           ),
-          const SizedBox(height: 14),
-          Semantics(
-            header: true,
-            child: Text('搜索', style: Theme.of(context).textTheme.headlineLarge),
+          if (!showingPage) _buildControls(sources, compact),
+          Expanded(
+            child: showingPage
+                ? _buildPage(page, compact)
+                : _buildBrowse(sources, compact),
           ),
-          const SizedBox(height: 18),
-          _buildSearchField(),
-          const SizedBox(height: 18),
-          if (showingRemote)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Flexible(
-                  child: Semantics(
-                    liveRegion: true,
-                    child: _ProgressChip(
-                      key: const Key('discover-result-count'),
-                      label: _progressLabel(results.length),
-                    ),
-                  ),
-                ),
-                if (busy)
-                  TextButton(
-                    key: const Key('discover-cancel'),
-                    onPressed: _cancelSearch,
-                    child: const Text('取消'),
-                  ),
-              ],
-            ),
-          if (showingRemote) const SizedBox(height: 14),
-          if (explored != null && !_searching)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${explored.entry.title} · ${explored.source.name}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: AppColors.muted,
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: widget.onSources,
-                    child: const Text('管理书源'),
-                  ),
-                ],
-              ),
-            ),
-          if (!showingRemote) ..._catalogResults(catalog),
-          if (_submitted.isEmpty &&
-              widget.controller.exploreCategories.isNotEmpty) ...[
-            const SizedBox(height: 26),
-            Text('书源发现', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final category in widget.controller.exploreCategories)
-                  ActionChip(
-                    key: ValueKey('discover-explore-${category.id}'),
-                    label: Text(category.entry.title),
-                    tooltip: category.source.name,
-                    onPressed: busy ? null : () => _explore(category),
-                  ),
-              ],
-            ),
-          ],
-          if (showingRemote) ...[
-            // 已经显示部分结果时不再压一个居中的转圈，进度胶囊足够表达状态。
-            if (_searching && results.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 32),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-            if (!_searching && _remote.isEmpty)
-              EmptyState(
-                title: _cancelledSearch
-                    ? '已取消搜索。'
-                    : _activeExplore == null
-                    ? '还没有启用的网络书源'
-                    : '这个分类暂时没有书籍',
-                description: _cancelledSearch
-                    ? '可以调整关键词后重新搜索。'
-                    : _activeExplore == null
-                    ? '在“书源”中导入你有权访问的书库配置，再来搜索。'
-                    : '可以稍后重试，或选择其他书源分类。',
-              ),
-            if (!_searching && _remote.isNotEmpty && results.isEmpty)
-              EmptyState(
-                title: _exactMatch ? '没有完全匹配的结果' : '没有找到相关书籍',
-                description: _exactMatch
-                    ? '关闭精确匹配可以查看相近的书名与作者。'
-                    : '换个关键词，或加载下一页看看。',
-              ),
-            for (final result in results)
-              _ResultRow(
-                book: result.primary,
-                controller: widget.controller,
-                inShelf: widget.controller.book(result.primary.id) != null,
-                sourceCount: result.sourceCount,
-                onTap: () => widget.onDetails(result.primary),
-              ),
-            if (failed.isNotEmpty)
-              _FailedSources(groups: failed, onRetry: _retry),
-            if (_remote.isNotEmpty && (_hasMore || _loadingMore))
-              Padding(
-                padding: const EdgeInsets.only(top: 18),
-                child: Center(
-                  child: OutlinedButton(
-                    key: const Key('discover-load-more'),
-                    onPressed: _loadingMore ? _cancelSearch : _loadMore,
-                    child: Text(
-                      _loadingMore ? '取消加载' : '加载下一页（${_page + 1}/10）',
-                    ),
-                  ),
-                ),
-              ),
-            ..._catalogResults(catalog),
-          ] else ...[
-            const SizedBox(height: 14),
-            QuietPanel(
-              child: Row(
-                children: [
-                  const Icon(Icons.language_outlined, color: AppColors.muted),
-                  const SizedBox(width: 16),
-                  const Expanded(
-                    child: Text(
-                      '自己的书源，自己的阅读世界。\n支持声明式 CSS 书源导入。',
-                      style: TextStyle(height: 1.8, color: AppColors.muted),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: widget.onSources,
-                    child: const Text('去添加'),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 24),
         ],
       );
     },
   );
 
-  Widget _buildSearchField() => ValueListenableBuilder<TextEditingValue>(
-    valueListenable: _query,
-    builder: (context, value, child) => Container(
-      decoration: BoxDecoration(
-        // 跟随主题的表面色，而不是单独写死的暖色。
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(30),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      child: TextField(
-        key: const Key('discover-search'),
-        controller: _query,
-        textInputAction: TextInputAction.search,
-        onSubmitted: (_) => _search(),
-        decoration: InputDecoration(
-          hintText: '搜索书名、作者',
-          hintStyle: const TextStyle(fontSize: 15, color: AppColors.muted),
-          filled: false,
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(vertical: 16),
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-          prefixIcon: const Icon(Icons.search, size: 22, color: AppColors.ink),
-          prefixIconConstraints: const BoxConstraints(
-            minWidth: 34,
-            minHeight: 34,
+  Widget _buildHeader(bool showingPage, bool compact) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          if (showingPage)
+            _CircleButton(
+              key: const Key('discover-page-back'),
+              icon: Icons.arrow_back,
+              tooltip: '返回发现',
+              onPress: _closePage,
+            )
+          else if (widget.onBack != null)
+            _CircleButton(
+              key: const Key('discover-back'),
+              icon: Icons.arrow_back,
+              tooltip: '返回书架',
+              onPress: widget.onBack,
+            ),
+          const Spacer(),
+          _CircleButton(
+            key: const Key('discover-search'),
+            icon: Icons.search,
+            tooltip: '搜索书籍',
+            onPress: _openSearch,
           ),
-          suffixIcon: value.text.isEmpty
-              ? null
-              : IconButton(
-                  tooltip: '清除搜索',
-                  onPressed: () {
-                    _query.clear();
-                    _search();
-                  },
-                  icon: const Icon(Icons.close, size: 20),
-                ),
-        ),
-      ),
-    ),
-  );
-
-  List<Widget> _catalogResults(List<Book> books) => [
-    const SizedBox(height: 26),
-    Row(
-      children: [
-        Expanded(
-          child: Text(
-            _submitted.isEmpty ? '值得重读的经典' : '本地结果 ${books.length}',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-        ),
-        const Text(
-          '公版 · 离线可读',
-          style: TextStyle(fontSize: 12, color: AppColors.muted),
-        ),
-      ],
-    ),
-    const SizedBox(height: 6),
-    if (books.isEmpty)
-      const EmptyState(
-        title: '本地书库没有匹配结果',
-        description: '试试其他关键词，或添加你自己的授权书源。',
-      ),
-    for (final book in books)
-      _ResultRow(
-        book: book,
-        controller: widget.controller,
-        inShelf: widget.controller.book(book.id) != null,
-        onTap: () => widget.onDetails(book),
-      ),
-  ];
-}
-
-class _CircleButton extends StatelessWidget {
-  const _CircleButton({
-    super.key,
-    required this.icon,
-    required this.tooltip,
-    required this.onPress,
-    this.active = false,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback? onPress;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) => Tooltip(
-    message: tooltip,
-    child: Material(
-      color: active ? AppColors.ink : _circleFill,
-      shape: const CircleBorder(),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onPress,
-        child: SizedBox(
-          width: 42,
-          height: 42,
-          child: Center(
-            child: Icon(
-              icon,
-              size: 20,
-              color: active ? Colors.white : AppColors.ink,
+          const SizedBox(width: 10),
+          _CircleButton(
+            key: const Key('discover-mode'),
+            icon: _mode == ExploreMode.content
+                ? Icons.view_carousel_outlined
+                : Icons.view_day_outlined,
+            tooltip: _mode == ExploreMode.content ? '切换到书源列表' : '切换到分类浏览',
+            onPress: () => _setMode(
+              _mode == ExploreMode.content
+                  ? ExploreMode.browse
+                  : ExploreMode.content,
             ),
           ),
+          const SizedBox(width: 10),
+          _CircleButton(
+            key: const Key('discover-sources'),
+            icon: Icons.settings_outlined,
+            tooltip: '管理书源',
+            onPress: widget.onSources,
+          ),
+        ],
+      ),
+      const SizedBox(height: 14),
+      Semantics(
+        header: true,
+        child: Text('发现', style: Theme.of(context).textTheme.headlineLarge),
+      ),
+      const SizedBox(height: 6),
+      Text(
+        _subtitle(showingPage),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 13, color: AppColors.muted),
+      ),
+    ],
+  );
+
+  String _subtitle(bool showingPage) {
+    final page = _page;
+    if (showingPage && page != null) {
+      return '${page.source.name} · ${page.kind.title}';
+    }
+    final group = _group;
+    if (group != null && group.isNotEmpty) return '分组：$group';
+    final sources = widget.controller.exploreSources;
+    return sources.isEmpty
+        ? '还没有启用的发现书源'
+        : '${sources.length} 个书源，${widget.controller.sourceGroups.length} 个分组';
+  }
+
+  Widget _buildControls(List<BookSource> sources, bool compact) {
+    final groups = widget.controller.sourceGroups;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(compact ? 16 : 32, 16, compact ? 16 : 32, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (groups.isNotEmpty)
+            SizedBox(
+              height: 36,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      key: const Key('discover-group-all'),
+                      label: const Text('全部分组'),
+                      selected: _group == null,
+                      showCheckmark: false,
+                      selectedColor: AppColors.softBlue,
+                      side: BorderSide.none,
+                      onSelected: (_) => setState(() => _group = null),
+                    ),
+                  ),
+                  for (final group in groups)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        key: ValueKey('discover-group-$group'),
+                        label: Text(group),
+                        selected: _group == group,
+                        showCheckmark: false,
+                        selectedColor: AppColors.softBlue,
+                        side: BorderSide.none,
+                        onSelected: (_) => setState(() => _group = group),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          if (_mode == ExploreMode.content)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        key: const Key('discover-source-select'),
+                        isExpanded: true,
+                        value: _selection.sourceUrl,
+                        hint: const Text('选择书源'),
+                        items: [
+                          for (final source in sources)
+                            DropdownMenuItem(
+                              value: source.id,
+                              child: Text(
+                                source.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) unawaited(_setSource(value));
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBrowse(List<BookSource> sources, bool compact) {
+    if (sources.isEmpty) {
+      return ListView(
+        padding: EdgeInsets.fromLTRB(
+          compact ? 16 : 32,
+          8,
+          compact ? 16 : 32,
+          28,
+        ),
+        children: [
+          EmptyState(
+            title: '还没有可浏览的书源',
+            description: '在“书源”里导入你有权访问的书库配置，并打开它的“发现”开关，这里就会列出它的发现分类。',
+            action: TextButton(
+              onPressed: widget.onSources,
+              child: const Text('去管理书源'),
+            ),
+          ),
+        ],
+      );
+    }
+    if (_mode == ExploreMode.content) return _buildContent(sources, compact);
+    return ListView.builder(
+      padding: EdgeInsets.fromLTRB(compact ? 16 : 32, 0, compact ? 16 : 32, 28),
+      itemCount: sources.length,
+      itemBuilder: (context, index) {
+        final source = sources[index];
+        return _SourceSection(
+          key: ValueKey('discover-source-${source.id}'),
+          source: source,
+          kinds: _kindsBySource[source.id] ?? const ExploreKindSet.empty(),
+          values: _infoBySource[source.id] ?? const {},
+          onOpen: (kind) => _openKind(source, kind),
+          onButton: (kind) => _onKindButton(source, kind),
+          onValueChanged: (kind, value) => _onKindValue(source, kind, value),
+        );
+      },
+    );
+  }
+
+  /// 内容模式：一次一条书源，顶部是它的分类标签，下面是当前分类的书籍列表。
+  Widget _buildContent(List<BookSource> sources, bool compact) {
+    final source = _sourceFor(_selection.sourceUrl) ?? sources.first;
+    final kinds = loadableExploreKinds(
+      (_kindsBySource[source.id] ?? const ExploreKindSet.empty()).kinds,
+    );
+    final selectedKindKey = _selection.kindKeyFor(source.id);
+    final selected = kinds.firstWhere(
+      (kind) => kind.key == selectedKindKey,
+      orElse: () => kinds.isEmpty ? const ExploreKind(title: '') : kinds.first,
+    );
+    final page = _page;
+    final showingCurrent =
+        page != null &&
+        page.source.id == source.id &&
+        page.kind.key == selected.key;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (kinds.isNotEmpty)
+          SizedBox(
+            height: 42,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 32),
+              children: [
+                for (final kind in kinds)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      key: ValueKey('discover-kind-${source.id}-${kind.title}'),
+                      label: Text(kind.title),
+                      selected: kind.key == selected.key,
+                      showCheckmark: false,
+                      selectedColor: AppColors.softBlue,
+                      side: BorderSide.none,
+                      onSelected: (_) => unawaited(_setKind(source.id, kind)),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: kinds.isEmpty
+              ? ListView(
+                  padding: EdgeInsets.all(compact ? 16 : 32),
+                  children: const [
+                    EmptyState(
+                      title: '这条书源没有可浏览的分类',
+                      description: '它的发现规则可能由脚本生成，当前版本无法加载。',
+                    ),
+                  ],
+                )
+              : showingCurrent
+              ? _buildPage(page, compact)
+              : _buildKindPlaceholder(source, selected, compact),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildKindPlaceholder(
+    BookSource source,
+    ExploreKind kind,
+    bool compact,
+  ) => ListView(
+    padding: EdgeInsets.fromLTRB(compact ? 16 : 32, 8, compact ? 16 : 32, 28),
+    children: [
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton(
+          key: const Key('discover-kind-open'),
+          onPressed: kind.isLoadable
+              ? () => unawaited(_openKind(source, kind, keepMode: true))
+              : null,
+          child: Text('浏览“${kind.title}”'),
         ),
       ),
-    ),
+    ],
   );
+
+  Widget _buildPage(_ExplorePage page, bool compact) {
+    final books = page.books;
+    return ListView(
+      padding: EdgeInsets.fromLTRB(compact ? 16 : 32, 8, compact ? 16 : 32, 28),
+      children: [
+        if (page.loading && books.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 40),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+        if (page.error != null && books.isEmpty)
+          EmptyState(
+            title: '这个分类暂时没有加载出来',
+            description: page.error!,
+            action: TextButton(
+              key: const Key('discover-page-retry'),
+              onPressed: () => unawaited(_loadPage(page, 1)),
+              child: const Text('重试'),
+            ),
+          ),
+        if (books.isNotEmpty && page.error == null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+              '共 ${books.length} 本',
+              style: const TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+          ),
+        for (final book in books.take(_pageBookLimit))
+          _ExploreBookTile(
+            key: ValueKey('discover-book-${book.id}'),
+            book: book,
+            controller: widget.controller,
+            inShelf: widget.controller.book(book.id) != null,
+            onTap: () => widget.onDetails(book),
+          ),
+        if (page.hasMore)
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: Center(
+              child: OutlinedButton(
+                key: const Key('discover-page-more'),
+                onPressed: page.loading
+                    ? null
+                    : () => unawaited(_loadPage(page, page.page + 1)),
+                child: Text(page.loading ? '加载中…' : '下一页'),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
-class _ProgressChip extends StatelessWidget {
-  const _ProgressChip({super.key, required this.label});
+/// 一次打开的分类列表状态；`generation` 用来丢弃迟到的旧请求结果。
+class _ExplorePage {
+  _ExplorePage({required this.source, required this.kind});
 
-  final String label;
+  final BookSource source;
+  final ExploreKind kind;
+  final int generation = _sequence++;
+  static int _sequence = 0;
 
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
-    decoration: BoxDecoration(
-      color: _circleFill,
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Text(
-      label,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: const TextStyle(fontSize: 13, color: AppColors.muted),
-    ),
-  );
+  Completer<void> abort = Completer<void>();
+  List<Book> books = const [];
+  bool loading = false;
+  bool hasMore = false;
+  int page = 1;
+  String? error;
 }
 
-class _SourceCountBadge extends StatelessWidget {
-  const _SourceCountBadge({super.key, required this.count});
+/// 浏览模式里的一条书源：标题、状态、以及它自己的发现分类。
+class _SourceSection extends StatelessWidget {
+  const _SourceSection({
+    super.key,
+    required this.source,
+    required this.kinds,
+    required this.values,
+    required this.onOpen,
+    required this.onButton,
+    required this.onValueChanged,
+  });
 
-  final int count;
+  final BookSource source;
+  final ExploreKindSet kinds;
+  final Map<String, String> values;
+  final ValueChanged<ExploreKind> onOpen;
+  final ValueChanged<ExploreKind> onButton;
+  final void Function(ExploreKind kind, String value) onValueChanged;
 
   @override
-  Widget build(BuildContext context) => Container(
-    constraints: const BoxConstraints(minWidth: 26),
-    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-    decoration: BoxDecoration(
-      color: _badgeFill,
-      borderRadius: BorderRadius.circular(7),
-    ),
-    child: Text(
-      '$count',
-      textAlign: TextAlign.center,
-      style: const TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
-        color: AppColors.muted,
+  Widget build(BuildContext context) {
+    final rows = kinds.kinds;
+    final groups = source.groups;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 22),
+      child: QuietPanel(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    source.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (groups.isNotEmpty)
+                  Flexible(
+                    child: Text(
+                      groups.join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            if (source.comment.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                source.comment,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.6,
+                  color: AppColors.muted,
+                ),
+              ),
+            ],
+            const SizedBox(height: 14),
+            if (kinds.isUnsupported)
+              Text(
+                kinds.unsupportedReason ?? '这条书源的发现分类无法加载。',
+                style: const TextStyle(fontSize: 13, color: AppColors.muted),
+              )
+            else if (rows.isEmpty)
+              const Text(
+                '这条书源没有声明发现分类。',
+                style: TextStyle(fontSize: 13, color: AppColors.muted),
+              )
+            else
+              ExploreKindRow(
+                source: source.id,
+                kinds: rows,
+                values: values,
+                onOpen: onOpen,
+                onButton: onButton,
+                onValueChanged: onValueChanged,
+              ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
-class _ResultRow extends StatelessWidget {
-  const _ResultRow({
+/// 发现页的书籍行：封面 + 书名 + 作者分类。
+class _ExploreBookTile extends StatelessWidget {
+  const _ExploreBookTile({
+    super.key,
     required this.book,
     required this.controller,
     required this.inShelf,
     required this.onTap,
-    this.sourceCount = 0,
   });
 
   final Book book;
   final AppController controller;
   final bool inShelf;
   final VoidCallback onTap;
-  final int sourceCount;
 
   @override
   Widget build(BuildContext context) {
@@ -679,7 +733,7 @@ class _ResultRow extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.symmetric(vertical: 10),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -688,8 +742,8 @@ class _ResultRow extends StatelessWidget {
                 child: BookCover(
                   book: book,
                   imageLoader: controller.loadBookCover,
-                  width: 72,
-                  height: 101,
+                  width: 66,
+                  height: 92,
                 ),
               ),
               const SizedBox(width: 14),
@@ -697,25 +751,11 @@ class _ResultRow extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Text(
-                            book.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ),
-                        if (sourceCount > 0) ...[
-                          const SizedBox(width: 10),
-                          _SourceCountBadge(
-                            key: Key('result-source-count-${book.id}'),
-                            count: sourceCount,
-                          ),
-                        ],
-                      ],
+                    Text(
+                      book.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
                     if (meta.isNotEmpty) ...[
                       const SizedBox(height: 6),
@@ -736,7 +776,7 @@ class _ResultRow extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 13,
+                          fontSize: 12,
                           height: 1.6,
                           color: AppColors.muted,
                         ),
@@ -760,117 +800,32 @@ class _ResultRow extends StatelessWidget {
   }
 }
 
-class _FailedSources extends StatelessWidget {
-  const _FailedSources({required this.groups, required this.onRetry});
-
-  final List<SourceSearchGroup> groups;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 16),
-    child: QuietPanel(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${groups.length} 个书源未返回结果',
-            style: const TextStyle(fontSize: 13, color: AppColors.muted),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            groups.map((group) => group.source.name).join('、'),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, color: AppColors.muted),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(onPressed: onRetry, child: const Text('重新搜索')),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _FilterSelection {
-  const _FilterSelection({required this.category, required this.shelfOnly});
-
-  final String category;
-  final bool shelfOnly;
-}
-
-class _FilterSheet extends StatefulWidget {
-  const _FilterSheet({
-    required this.initialCategory,
-    required this.initialShelfOnly,
+class _CircleButton extends StatelessWidget {
+  const _CircleButton({
+    super.key,
+    required this.icon,
+    required this.tooltip,
+    required this.onPress,
   });
 
-  final String initialCategory;
-  final bool initialShelfOnly;
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onPress;
 
   @override
-  State<_FilterSheet> createState() => _FilterSheetState();
-}
-
-class _FilterSheetState extends State<_FilterSheet> {
-  late String _category = widget.initialCategory;
-  late bool _shelfOnly = widget.initialShelfOnly;
-
-  @override
-  Widget build(BuildContext context) => SafeArea(
-    top: false,
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(22, 2, 22, 22),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('筛选', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 16),
-          const Text(
-            '本地书库分类',
-            style: TextStyle(fontSize: 13, color: AppColors.muted),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final category in _DiscoverScreenState._categories)
-                ChoiceChip(
-                  key: ValueKey('discover-filter-$category'),
-                  label: Text(category),
-                  selected: _category == category,
-                  showCheckmark: false,
-                  selectedColor: AppColors.softBlue,
-                  side: BorderSide.none,
-                  onSelected: (_) => setState(() => _category = category),
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          SwitchListTile(
-            key: const Key('discover-filter-shelf-only'),
-            contentPadding: EdgeInsets.zero,
-            title: const Text('只看已在书架的书'),
-            value: _shelfOnly,
-            onChanged: (value) => setState(() => _shelfOnly = value),
-          ),
-          const SizedBox(height: 6),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              key: const Key('discover-filter-done'),
-              onPressed: () => Navigator.of(context).pop(
-                _FilterSelection(category: _category, shelfOnly: _shelfOnly),
-              ),
-              child: const Text('完成'),
-            ),
-          ),
-        ],
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip,
+    child: Material(
+      color: _circleFill,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPress,
+        child: SizedBox(
+          width: 42,
+          height: 42,
+          child: Icon(icon, size: 20, color: AppColors.ink),
+        ),
       ),
     ),
   );

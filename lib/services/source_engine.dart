@@ -98,10 +98,17 @@ class SourceEngine {
     );
   }
 
+  /// Loads one page of an explore category.
+  ///
+  /// [exploreInfo] carries the values a source's own form items collected (text
+  /// fields, toggles, selects), which legado threads into the category URL as
+  /// `{{name}}` placeholders. It is sent as request variables rather than as a
+  /// script context because this runtime has no script engine.
   Future<List<Book>> explore(
     BookSource source,
     SourceExploreEntry entry, {
     int page = 1,
+    Map<String, String> exploreInfo = const {},
     Future<void>? abortTrigger,
   }) async {
     final rules = source.exploreRules;
@@ -109,7 +116,7 @@ class SourceEngine {
     final response = await _fetch(
       source,
       entry.url,
-      variables: {'page': page},
+      variables: {'page': page, ...exploreInfo},
       abortTrigger: abortTrigger,
     );
     return _parseBookList(

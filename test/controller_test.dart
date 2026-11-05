@@ -1780,6 +1780,44 @@ void main() {
     expect(await controller.repository.sources(), isEmpty);
   });
 
+  test(
+    'editing a source url replaces the record instead of copying it',
+    () async {
+      await controller.importSources(
+        jsonEncode([
+          {
+            'bookSourceUrl': 'https://before.example',
+            'bookSourceName': '改址书源',
+            'searchUrl': '/search?q={{key}}',
+            'ruleSearch': {
+              'bookList': '@CSS:.book',
+              'name': '@CSS:a@text',
+              'bookUrl': '@CSS:a@href',
+            },
+          },
+        ]),
+      );
+      final before = controller.sources.single;
+
+      await controller.updateSource(
+        before.withName('改址书源').withFields({
+          'bookSourceUrl': 'https://after.example',
+        }),
+        previousId: before.id,
+      );
+
+      expect(controller.sources.map((source) => source.id), [
+        'https://after.example',
+      ]);
+      expect(await controller.repository.sources(), hasLength(1));
+      expect(
+        await controller.repository.sourceState('https://before.example'),
+        isNull,
+        reason: '旧地址的导入记录也应该一并清掉',
+      );
+    },
+  );
+
   test('settings and bookmark actions update durable state', () async {
     await controller.updateSettings(
       const ReaderSettings(theme: ReaderTheme.dark, fontSize: 28),

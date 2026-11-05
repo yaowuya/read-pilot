@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -6,6 +7,7 @@ import '../data/app_repository.dart';
 import '../data/sample_catalog.dart';
 import '../domain/book.dart';
 import '../domain/book_source.dart';
+import '../domain/explore_kind.dart';
 import '../domain/reader_settings.dart';
 import '../domain/reader_style_preset.dart';
 import '../domain/reader_mark.dart';
@@ -1290,6 +1292,7 @@ class AppController extends ChangeNotifier {
   Future<SourceSearchGroup> exploreSource(
     SourceExploreCategory category, {
     int page = 1,
+    Map<String, String> exploreInfo = const {},
     Future<void>? abortTrigger,
   }) async {
     try {
@@ -1299,6 +1302,7 @@ class AppController extends ChangeNotifier {
           category.source,
           category.entry,
           page: page,
+          exploreInfo: exploreInfo,
           abortTrigger: abortTrigger,
         ),
       );
@@ -1306,6 +1310,127 @@ class AppController extends ChangeNotifier {
       return SourceSearchGroup(category.source, [], error: error.toString());
     }
   }
+
+  /// Explores one source's category using the form values its own items
+  /// collected, so text/toggle/select kinds reach the request as variables.
+  Future<SourceSearchGroup> exploreKind(
+    BookSource source,
+    ExploreKind kind, {
+    int page = 1,
+    Future<void>? abortTrigger,
+  }) async {
+    final info = await repository.exploreInfo(source.id);
+    final entry = SourceExploreEntry(title: kind.title, url: kind.url ?? '');
+    try {
+      return SourceSearchGroup(
+        source,
+        await engine.explore(
+          source,
+          entry,
+          page: page,
+          exploreInfo: info,
+          abortTrigger: abortTrigger,
+        ),
+      );
+    } catch (error) {
+      return SourceSearchGroup(source, [], error: error.toString());
+    }
+  }
+
+  /// Sources the discover page lists, in legado's order: `customOrder` first and
+  /// only sources that opted into explore.
+  List<BookSource> get exploreSources => List.unmodifiable([
+    for (final source in _sources)
+      if (source.enabled && source.enabledExplore && source.hasExplore) source,
+  ]);
+
+  /// Every group name declared by any installed source, sorted for the filter.
+  List<String> get sourceGroups {
+    final groups = <String>{};
+    for (final source in _sources) {
+      groups.addAll(source.groups);
+    }
+    final sorted = groups.toList()..sort();
+    return List.unmodifiable(sorted);
+  }
+
+  /// Sources in [group], or every explore source when [group] is null/blank.
+  List<BookSource> exploreSourcesInGroup(String? group) {
+    final name = group?.trim() ?? '';
+    if (name.isEmpty) return exploreSources;
+    return List.unmodifiable(
+      exploreSources.where((source) => source.groups.contains(name)),
+    );
+  }
+
+  Future<Map<String, String>> sourceExploreInfo(String sourceId) =>
+      repository.exploreInfo(sourceId);
+
+  Future<void> saveSourceExploreInfo(
+    String sourceId,
+    Map<String, String> values,
+  ) => repository.saveExploreInfo(sourceId, values);
+
+  Future<ExploreMainSelection> exploreSelection() =>
+      repository.exploreSelection();
+
+  Future<void> saveExploreSelection(ExploreMainSelection selection) =>
+      repository.saveExploreSelection(selection);
+
+  Future<void> setSourceEnabledExplore(BookSource source, bool value) async {
+    if (!_sources.any((item) => item.id == source.id)) return;
+    await repository.setSourceEnabledExplore(source.id, value);
+    _sources = _sources
+        .map(
+          (item) =>
+              item.id == source.id ? item.withEnabledExplore(value) : item,
+        )
+        .toList();
+    _notify();
+  }
+
+  /// Saves an edited source and refreshes the in-memory list.
+  ///
+  /// Editing the URL changes the record key (it is legado's primary key), so the
+  /// old record is removed first to avoid leaving a duplicate behind.
+  /// 保存一条书源的编辑结果。
+  ///
+  /// `bookSourceUrl` 是书源的主键，用户可以改它。此时新记录以新 id 写入，旧 id
+  /// 的记录必须显式删掉，否则书源列表里会出现两条同名记录。
+  Future<void> updateSource(BookSource source, {String? previousId}) async {
+    final before = previousId ?? source.id;
+    await repository.replaceSource(source);
+    if (before != source.id) {
+      await repository.deleteSource(before);
+    }
+    _sources = await repository.sources();
+    _notify();
+  }
+
+  Future<void> moveSourceToTop(String id) async {
+    final moved = await repository.moveSourceToTop(id);
+    if (moved == null) return;
+    _sources = await repository.sources();
+    _notify();
+  }
+
+  Future<void> deleteSources(Iterable<String> ids) async {
+    final removing = ids.toSet();
+    if (removing.isEmpty) return;
+    for (final id in removing) {
+      await repository.deleteSource(id);
+    }
+    _sources = _sources
+        .where((source) => !removing.contains(source.id))
+        .toList();
+    _notify();
+  }
+
+  /// The JSON array legado's source manager exports, so a user's library can
+  /// leave this app in a format every 阅读 client accepts.
+  String exportSourcesJson() => const JsonEncoder.withIndent(
+    '  ',
+  ).convert([for (final source in _sources) source.toJson()]);
 
   Future<SourceSearchGroup> _search(
     BookSource source,

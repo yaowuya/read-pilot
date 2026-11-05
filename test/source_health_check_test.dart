@@ -45,6 +45,7 @@ class _HealthSourceEngine extends SourceEngine {
     BookSource source,
     SourceExploreEntry entry, {
     int page = 1,
+    Map<String, String> exploreInfo = const {},
     Future<void>? abortTrigger,
   }) async {
     calls.add('explore');
