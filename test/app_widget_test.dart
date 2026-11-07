@@ -158,7 +158,7 @@ void main() {
     );
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
-    expect(find.text('我的书架'), findsOneWidget);
+    expect(find.byKey(const Key('shelf-title')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

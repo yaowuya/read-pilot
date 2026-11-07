@@ -1188,7 +1188,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('reader-back')), findsNothing);
-    expect(find.text('我的书架'), findsOneWidget);
+    expect(find.byKey(const Key('shelf-title')), findsOneWidget);
   });
 
   testWidgets('marking a book finished reports storage failure', (
