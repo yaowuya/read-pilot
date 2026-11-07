@@ -38,6 +38,15 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
   /// 向下拖到底时占屏比例，再往下就是关闭。
   static const _minSize = .4;
 
+  /// 头部图标按钮收紧到 36 见方：一行里要塞下计数、选项、排序、刷新、关闭，
+  /// 默认 48 的点击区会把中间那行状态文字挤没。
+  static final ButtonStyle _headerButtonStyle = IconButton.styleFrom(
+    minimumSize: const Size(36, 36),
+    padding: EdgeInsets.zero,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    visualDensity: VisualDensity.compact,
+  );
+
   final _sheetController = DraggableScrollableController();
   final _filter = TextEditingController();
   SourceCandidateSearchResult? _result;
@@ -185,18 +194,6 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
     return ranked.map((entry) => entry.$2).toList();
   }
 
-  String get _currentChapterDescription {
-    final chapters = widget.book.chapters;
-    if (chapters.isEmpty) return '当前章节：目录尚未加载';
-    final index = widget.book.position.chapterIndex
-        .clamp(0, chapters.length - 1)
-        .toInt();
-    final title = chapters[index].title.trim();
-    return title.isEmpty
-        ? '当前章节：第 ${index + 1} 章'
-        : '当前章节：第 ${index + 1} 章 · $title';
-  }
-
   String _statusText(
     SourceCandidateSearchResult? result,
     List<Book> candidates,
@@ -252,219 +249,152 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
               children: [
                 GestureDetector(
                   // 标题行也要能拖：用户上手的第一反应是抓最上面那条，
-                  // 而不是去够下面的列表。
+                  // 而不是去够下面的列表。整块头部（标题行 + 筛选框）都接受拖拽。
                   behavior: HitTestBehavior.opaque,
                   onVerticalDragUpdate: _resizeSheet,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Semantics(
-                            header: true,
-                            child: Text(
-                              '换源',
-                              style: Theme.of(context).textTheme.titleLarge,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 候选数、选项与排序都并进标题这一行：换源要看的就是候选列表，
+                      // 说明块和单独的状态行只会把候选挤出屏幕。
+                      Padding(
+                        key: const Key('source-switch-status'),
+                        padding: const EdgeInsets.fromLTRB(20, 4, 12, 4),
+                        child: Row(
+                          children: [
+                            Semantics(
+                              header: true,
+                              child: Text(
+                                '换源',
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
                             ),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: '刷新候选',
-                          onPressed: !_loading && _switchingId == null
-                              ? () => _reload(manual: true)
-                              : null,
-                          icon: const Icon(Icons.refresh),
-                        ),
-                        IconButton(
-                          tooltip: '关闭',
-                          onPressed: _switchingId == null
-                              ? () => Navigator.pop(context)
-                              : null,
-                          icon: const Icon(Icons.close),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Flexible(
-                  fit: FlexFit.loose,
-                  child: GestureDetector(
-                    // 头部没有可滚动内容，拖这里也应该能改变面板高度，
-                    // 否则用户只有抓住下方列表才拖得动。
-                    behavior: HitTestBehavior.opaque,
-                    onVerticalDragUpdate: _resizeSheet,
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  widget.book.title,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.titleMedium,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '当前书源：${widget.book.sourceLabel}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    color: AppColors.muted,
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  _currentChapterDescription,
-                                  key: const Key(
-                                    'source-switch-current-chapter',
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Semantics(
+                                liveRegion: true,
+                                child: Text(
+                                  _statusText(
+                                    result,
+                                    candidates,
+                                    sourceCount,
+                                    filtering,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                    fontSize: 13,
+                                    fontSize: 12,
                                     color: AppColors.muted,
                                   ),
                                 ),
-                                if (result?.fromCache ?? false) ...[
-                                  const SizedBox(height: 10),
-                                  QuietPanel(
-                                    key: const Key(
-                                      'source-switch-cache-status',
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 8,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(
-                                          Icons.history,
-                                          size: 16,
-                                          color: AppColors.muted,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            '已恢复上次加载的书源，10 天内可直接选择。',
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: AppColors.muted,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                              ),
+                            ),
+                            IconButton(
+                              key: const Key('source-switch-options'),
+                              tooltip: _settings.checkAuthor ? '已限定作者' : '搜索选项',
+                              style: _headerButtonStyle,
+                              onPressed: _switchingId == null
+                                  ? _openOptions
+                                  : null,
+                              icon: Icon(
+                                _settings.checkAuthor ||
+                                        _settings.sortByWordCount
+                                    ? Icons.tune
+                                    : Icons.tune_outlined,
+                                size: 20,
+                                color:
+                                    _settings.checkAuthor ||
+                                        _settings.sortByWordCount
+                                    ? AppColors.ink
+                                    : AppColors.muted,
+                              ),
+                            ),
+                            PopupMenuButton<bool>(
+                              key: const Key('source-switch-sort'),
+                              tooltip: '排序',
+                              enabled: !_loading && _switchingId == null,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 10,
+                              ),
+                              onSelected: (value) =>
+                                  setState(() => _sortBySource = value),
+                              itemBuilder: (_) => [
+                                CheckedPopupMenuItem(
+                                  value: false,
+                                  checked: !_sortBySource,
+                                  child: const Text('相关度'),
+                                ),
+                                CheckedPopupMenuItem(
+                                  value: true,
+                                  checked: _sortBySource,
+                                  child: const Text('书源名称'),
+                                ),
+                              ],
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.sort, size: 18),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    _sortBySource ? '书源名称' : '相关度',
+                                    style: const TextStyle(fontSize: 12),
                                   ),
                                 ],
-                                const SizedBox(height: 16),
-                                TextField(
-                                  key: const Key('source-switch-filter'),
-                                  controller: _filter,
-                                  enabled: _switchingId == null,
-                                  onChanged: (_) => setState(() {}),
-                                  decoration: InputDecoration(
-                                    hintText: '筛选书源或作者',
-                                    prefixIcon: const Icon(
-                                      Icons.search,
-                                      size: 20,
-                                    ),
-                                    fillColor: _surface,
-                                    isDense: true,
-                                    suffixIcon: _filter.text.isEmpty
-                                        ? null
-                                        : IconButton(
-                                            tooltip: '清除筛选',
-                                            onPressed: _clearFilter,
-                                            icon: const Icon(
-                                              Icons.close,
-                                              size: 18,
-                                            ),
-                                          ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '刷新候选',
+                              style: _headerButtonStyle,
+                              onPressed: !_loading && _switchingId == null
+                                  ? () => _reload(manual: true)
+                                  : null,
+                              icon: const Icon(Icons.refresh, size: 20),
+                            ),
+                            IconButton(
+                              tooltip: '关闭',
+                              style: _headerButtonStyle,
+                              onPressed: _switchingId == null
+                                  ? () => Navigator.pop(context)
+                                  : null,
+                              icon: const Icon(Icons.close, size: 20),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                        child: TextField(
+                          key: const Key('source-switch-filter'),
+                          controller: _filter,
+                          enabled: _switchingId == null,
+                          onChanged: (_) => setState(() {}),
+                          decoration: InputDecoration(
+                            hintText: '筛选书源或作者',
+                            // 主题里的 contentPadding 是给整页表单用的，
+                            // 这里压扁它，多留几行候选。
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 9,
+                            ),
+                            prefixIcon: const Icon(Icons.search, size: 20),
+                            prefixIconConstraints: const BoxConstraints(
+                              minWidth: 34,
+                              minHeight: 0,
+                            ),
+                            fillColor: _surface,
+                            isDense: true,
+                            suffixIcon: _filter.text.isEmpty
+                                ? null
+                                : IconButton(
+                                    tooltip: '清除筛选',
+                                    onPressed: _clearFilter,
+                                    icon: const Icon(Icons.close, size: 18),
                                   ),
-                                ),
-                                const SizedBox(height: 12),
-                              ],
+                            suffixIconConstraints: const BoxConstraints(
+                              minWidth: 34,
+                              minHeight: 0,
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                Padding(
-                  key: const Key('source-switch-status'),
-                  padding: const EdgeInsets.fromLTRB(20, 0, 16, 4),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Semantics(
-                          liveRegion: true,
-                          child: Text(
-                            _statusText(
-                              result,
-                              candidates,
-                              sourceCount,
-                              filtering,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.muted,
-                            ),
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        key: const Key('source-switch-options'),
-                        tooltip: _settings.checkAuthor ? '已限定作者' : '搜索选项',
-                        onPressed: _switchingId == null ? _openOptions : null,
-                        icon: Icon(
-                          _settings.checkAuthor || _settings.sortByWordCount
-                              ? Icons.tune
-                              : Icons.tune_outlined,
-                          size: 20,
-                          color:
-                              _settings.checkAuthor || _settings.sortByWordCount
-                              ? AppColors.ink
-                              : AppColors.muted,
-                        ),
-                      ),
-                      PopupMenuButton<bool>(
-                        key: const Key('source-switch-sort'),
-                        tooltip: '排序',
-                        enabled: !_loading && _switchingId == null,
-                        onSelected: (value) =>
-                            setState(() => _sortBySource = value),
-                        itemBuilder: (_) => [
-                          CheckedPopupMenuItem(
-                            value: false,
-                            checked: !_sortBySource,
-                            child: const Text('相关度'),
-                          ),
-                          CheckedPopupMenuItem(
-                            value: true,
-                            checked: _sortBySource,
-                            child: const Text('书源名称'),
-                          ),
-                        ],
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.sort, size: 18),
-                              const SizedBox(width: 6),
-                              Text(_sortBySource ? '书源名称' : '相关度'),
-                            ],
                           ),
                         ),
                       ),

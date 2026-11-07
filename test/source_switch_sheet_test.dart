@@ -263,6 +263,46 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('header is just the title row plus the filter field', (
+    tester,
+  ) async {
+    controller.candidates = [
+      _book('z-first', 'Zeta', '原作者'),
+      _book('a-second', 'Alpha', '原作者'),
+      _book('a-third', 'Alpha', '另一作者'),
+    ];
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+
+    // 书名/当前书源/当前章节/缓存提示四行说明块整块去掉：换源时看的是候选，
+    // 说明块只会把候选挤出这半屏。书名本身仍出现在候选行上。
+    expect(find.text('当前书源：旧源'), findsNothing);
+    expect(
+      find.byKey(const Key('source-switch-current-chapter')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('source-switch-cache-status')), findsNothing);
+
+    // 候选计数与「相关度」都挪到「换源」这一行，搜索框单独一行压在下面。
+    final title = tester.getRect(find.text('换源'));
+    final count = tester.getRect(find.text('候选 3 · 2 个书源'));
+    final sort = tester.getRect(find.byKey(const Key('source-switch-sort')));
+    final filter = tester.getRect(
+      find.byKey(const Key('source-switch-filter')),
+    );
+    expect(count.center.dy, closeTo(title.center.dy, 12));
+    expect(sort.center.dy, closeTo(title.center.dy, 12));
+    expect(filter.top, greaterThan(title.bottom));
+    expect(filter.height, lessThan(56));
+
+    // 头部瘦下来之后，默认三分之二屏里搜索框和第一张候选不重叠。
+    final firstRow = tester.getRect(
+      find.byKey(const Key('source-candidate-z-first')),
+    );
+    expect(filter.bottom, lessThan(firstRow.top));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('dragging the sheet up grows it, dragging down shrinks it', (
     tester,
   ) async {
@@ -312,11 +352,12 @@ void main() {
       expect(controller.reloads, 0);
       expect(controller.searches, 0);
       expect(find.byKey(const Key('source-candidate-cached')), findsOneWidget);
+      // 头部只剩标题行与筛选框：书说明块整块去掉，缓存提示也随之消失。
+      expect(find.byKey(const Key('source-switch-cache-status')), findsNothing);
       expect(
-        find.byKey(const Key('source-switch-cache-status')),
-        findsOneWidget,
+        find.byKey(const Key('source-switch-current-chapter')),
+        findsNothing,
       );
-      expect(find.text('已恢复上次加载的书源，10 天内可直接选择。'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -530,11 +571,8 @@ void main() {
         find.byKey(const Key('source-candidate-a-second')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(const Key('source-switch-cache-status')),
-        findsOneWidget,
-      );
-      expect(find.text('已恢复上次加载的书源，10 天内可直接选择。'), findsOneWidget);
+      // 复用缓存时不再有独立的提示块，头部只保留标题行与筛选框。
+      expect(find.byKey(const Key('source-switch-cache-status')), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -546,7 +584,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('换源'), findsOneWidget);
-    expect(find.text('当前书源：旧源'), findsOneWidget);
     expect(find.text('候选 3 · 2 个书源'), findsOneWidget);
     final filter = find.byKey(const Key('source-switch-filter'));
     await tester.enterText(filter, 'zETA');

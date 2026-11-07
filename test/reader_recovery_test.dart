@@ -352,7 +352,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
-    expect(find.textContaining('当前书源：'), findsOneWidget);
+    expect(find.text('换源'), findsOneWidget);
     expect(find.byKey(const Key('source-switch-filter')), findsOneWidget);
     expect(tester.takeException(), isNull);
 
