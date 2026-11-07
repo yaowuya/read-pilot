@@ -42,9 +42,10 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
-    expect(find.text('阅读'), findsOneWidget);
+    expect(find.byKey(const Key('shelf-title')), findsOneWidget);
     expect(find.text('阅航'), findsNothing);
-    expect(find.bySemanticsLabel('阅读标志'), findsOneWidget);
+    // The phone layout has no global brand bar: each screen owns its header.
+    expect(find.bySemanticsLabel('阅读标志'), findsNothing);
     expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
     expect(find.byTooltip('批量导入 TXT 或 EPUB'), findsOneWidget);
     expect(find.byType(NavigationBar), findsOneWidget);

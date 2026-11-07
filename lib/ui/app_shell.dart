@@ -196,27 +196,11 @@ class _AppShellState extends State<AppShell> {
           ],
         );
         return Scaffold(
-          appBar: wide
-              ? null
-              : AppBar(
-                  titleSpacing: 20,
-                  title: const Row(
-                    children: [
-                      BrandMark(size: 26),
-                      SizedBox(width: 12),
-                      Text(
-                        '阅读',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 2,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+          // No global app bar: every screen owns its own header (the shelf has
+          // its title row, discover its own toolbar), and a brand bar on top of
+          // them only repeated the product name.
           body: SafeArea(
-            top: wide,
+            top: true,
             bottom: false,
             child: Row(
               children: [

@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>书架顶部与分组内书籍操作 · 修复草稿</title>
+<style>
+  :root {
+    --ink: #252932;
+    --muted: #626976;
+    --blue: #2468DE;
+    --bg: #F7F8FA;
+    --line: #E7E9EE;
+    --red: #F04438;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 28px 72px;
+    background: #eef0f4;
+    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: -.3px; }
+  .lede { color: var(--muted); font-size: 14px; margin: 0 0 34px; }
+  h2 {
+    font-size: 16px; margin: 44px 0 14px; padding-top: 18px;
+    border-top: 1px solid #dcdfe6;
+  }
+  h2:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+  .pair { display: flex; gap: 26px; flex-wrap: wrap; align-items: flex-start; }
+  .phone {
+    width: 300px; background: var(--bg); border-radius: 22px;
+    padding: 14px 0 0; box-shadow: 0 2px 10px rgba(20,30,60,.09);
+    border: 1px solid #e2e5ea; overflow: hidden;
+  }
+  .phone .screen { padding: 0 18px 18px; }
+  .tag {
+    display: inline-block; font-size: 11.5px; font-weight: 600;
+    padding: 3px 9px; border-radius: 20px; margin-bottom: 10px;
+  }
+  .tag.before { background: #fdeceb; color: #b3261e; }
+  .tag.after  { background: #e8f0ff; color: #1b4fb8; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.85; margin-top: 10px; }
+  .appbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 0 14px; margin: 0 -18px 10px; padding-left: 18px;
+    background: var(--bg); border-bottom: 1px solid transparent;
+  }
+  .appbar.removed { border: 1px dashed #d8b4b0; background: #fff6f5; }
+  .appbar .mark {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: linear-gradient(160deg, #3AA9FF, #28A1FF);
+    display: grid; place-items: center; color: #fff; font-size: 13px;
+  }
+  .appbar .word { font-size: 20px; font-weight: 600; letter-spacing: 2px; }
+  .strike { text-decoration: line-through; opacity: .45; }
+  .pill {
+    height: 38px; border-radius: 19px; background: #fff;
+    border: 1px solid var(--line); display: flex; align-items: center;
+    padding: 0 14px; gap: 8px;
+  }
+  .pill .ico { color: var(--muted); font-size: 16px; line-height: 1; }
+  .pill .hint { flex: 1; font-size: 13.5px; color: var(--muted); }
+  .pill .hint.baseline { transform: translateY(-6.5px); }
+  .pill .divider { width: 1px; height: 16px; background: var(--line); }
+  .pill .action { font-size: 13px; font-weight: 600; padding: 0 6px; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 14px 0 4px; }
+  .row .title { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
+  .row .spacer { flex: 1; }
+  .chip {
+    height: 38px; padding: 0 14px; border-radius: 10px; background: var(--blue);
+    color: #fff; font-size: 13px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .iconbtn {
+    width: 34px; height: 34px; border-radius: 9px; display: grid;
+    place-items: center; color: var(--ink); background: #eef1f5; font-size: 14px;
+  }
+  .tabs { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin: 14px 0 16px; }
+  .tabs .on { color: var(--blue); font-weight: 600; }
+  .cards { display: flex; gap: 12px; }
+  .card { flex: 1; }
+  .card .collage {
+    aspect-ratio: 205/268; border-radius: 6px; background: #e9ecf0;
+    position: relative; overflow: hidden;
+  }
+  .card .collage.two { display: grid; grid-template-columns: 1fr 1fr; }
+  .card .collage .half { background: linear-gradient(160deg, #cfd8e6, #b9c6da); }
+  .card .collage .half.b { background: linear-gradient(160deg, #e2d6c4, #cfbfa6); }
+  .badge {
+    position: absolute; right: 0; top: 0; background: var(--red); color: #fff;
+    font-size: 9px; font-weight: 600; padding: 2px 6px;
+    border-radius: 0 5px 0 5px;
+  }
+  .card .name { font-size: 12.5px; font-weight: 600; margin-top: 8px; }
+  .card .sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .footer {
+    display: flex; align-items: center; gap: 8px; font-size: 12px;
+    color: var(--muted); margin-top: 26px; padding: 10px 0;
+  }
+  .footer.removed { border: 1px dashed #d8b4b0; background: #fff6f5; border-radius: 8px; }
+  .menu {
+    background: #fff; border-radius: 12px; padding: 6px 0; width: 210px;
+    box-shadow: 0 8px 24px rgba(20,30,60,.16); border: 1px solid #e6e9ee;
+  }
+  .menu .item { padding: 11px 16px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+  .menu .item.new { color: var(--blue); font-weight: 600; background: #f4f8ff; }
+  .menu .item.danger { color: #b3261e; }
+  .menu .sep { height: 1px; background: var(--line); margin: 5px 0; }
+  .pillbox { width: 300px; }
+  .measure {
+    font-size: 11.5px; color: #b3261e; margin-top: 6px; font-variant-numeric: tabular-nums;
+  }
+  .ok { color: #1b7f4b; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid #e2e5ea; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  code { background: #e9ecf2; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .rec { background: #eaf3ff; border-left: 3px solid var(--blue); padding: 12px 16px; border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.85; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>书架顶部与分组内书籍操作 · 修复草稿</h1>
+  <p class="lede">四处视觉清理 + 一处真实缺陷。左边是现状，右边是拟改。推荐方案已标出。</p>
+
+  <h2>1 · 顶部品牌条</h2>
+  <div class="pair">
+    <div>
+      <span class="tag before">现状</span>
+      <div class="phone"><div class="screen">
+        <div class="appbar removed">
+          <div class="mark">阅</div><div class="word">阅读</div>
+        </div>
+        <div class="pill"><span class="ico">🔍</span><span class="hint">搜索书名或作者</span><span class="divider"></span><span class="action">书城</span></div>
+        <div class="row"><span class="title">书架</span><span class="spacer"></span><span class="iconbtn">⚙</span><span class="chip">＋ 导入</span></div>
+      </div></div>
+      <p class="note">顶部一条「图标 + 阅读」，占掉约 56px，和书架标题重复表达同一件事。</p>
+    </div>
+    <div>
+      <span class="tag after">拟改（推荐）</span>
+      <div class="phone"><div class="screen">
+        <div style="height:8px"></div>
+        <div class="pill"><span class="ico">🔍</span><span class="hint">搜索书名或作者</span></div>
+        <div class="row"><span class="title">书架</span><span class="spacer"></span><span class="iconbtn">⚙</span><span class="chip">＋ 导入</span></div>
+      </div></div>
+      <p class="note">删掉整条 AppBar，内容直接顶到状态栏下方（<code>SafeArea(top: true)</code>）。品牌仍在「我的 → 关于阅读」和宽屏侧栏里。</p>
+    </div>
+  </div>
+
+  <h2>2 · 搜索胶囊：文字对齐 + 去掉书城</h2>
+  <div class="pair">
+    <div class="pillbox">
+      <span class="tag before">现状</span>
+      <div class="pill"><span class="ico">🔍</span><span class="hint baseline">搜索书名或作者</span><span class="divider"></span><span class="action">书城</span></div>
+      <p class="measure">hint 中心比输入框中心高 6.5px ↑</p>
+      <p class="note"><code>isCollapsed: true</code> 把输入框压成 20px，hint 仍按主题的 1.65 行高排，于是整体上浮。</p>
+    </div>
+    <div class="pillbox">
+      <span class="tag after">拟改（推荐）</span>
+      <div class="pill"><span class="ico">🔍</span><span class="hint">搜索书名或作者</span></div>
+      <p class="measure ok">hint 中心与输入框中心偏差 0.00px ✓</p>
+      <p class="note">改 <code>isDense: true</code> + <code>contentPadding: EdgeInsets.zero</code>，实测对齐。书城按钮连同分隔线一起删掉——底部导航已经有「发现」。</p>
+    </div>
+  </div>
+
+  <h2>3 · 分组内的书移回默认书架（真实缺陷）</h2>
+  <div class="pair">
+    <div>
+      <span class="tag before">现状</span>
+      <div class="menu">
+        <div class="item">书籍信息</div>
+        <div class="item">加入分组</div>
+        <div class="sep"></div>
+        <div class="item danger">移出书架</div>
+      </div>
+      <p class="note">在分组里打开一本书的更多操作，只有「移出书架」——那是把整本书连同正文、进度、笔记一起删掉。想把书退回默认书架（移出这个分组）没有入口。</p>
+    </div>
+    <div>
+      <span class="tag after">拟改（推荐）</span>
+      <div class="menu">
+        <div class="item">书籍信息</div>
+        <div class="item">加入分组</div>
+        <div class="sep"></div>
+        <div class="item new">移出分组</div>
+        <div class="item danger">移出书架</div>
+      </div>
+      <p class="note">只在分组作用域里出现「移出分组」，走 <code>setShelfGroupMembership(groupId, bookId, false)</code>，只解除归属，正文与进度不动。在「全部书籍」里不显示这一项。</p>
+    </div>
+  </div>
+
+  <h2>4 · 底部说明行</h2>
+  <div class="pair">
+    <div>
+      <span class="tag before">现状</span>
+      <div class="phone" style="padding-bottom:14px"><div class="screen">
+        <div class="cards">
+          <div class="card"><div class="collage two"><div class="half"></div><div class="half b"></div></div><div class="name">全部书籍</div><div class="sub">5 本</div></div>
+          <div class="card"><div class="collage" style="background:#f0f2f5"></div><div class="name">Fiction</div><div class="sub">0 本</div></div>
+        </div>
+        <div class="footer removed"><span>☁</span><span>书与阅读记录，安心留在本机。</span></div>
+      </div></div>
+      <p class="note">页脚说明行占掉底部一条，并且和「我的」页里的同类说明重复。</p>
+    </div>
+    <div>
+      <span class="tag after">拟改（推荐）</span>
+      <div class="phone" style="padding-bottom:14px"><div class="screen">
+        <div class="cards">
+          <div class="card"><div class="collage two"><div class="half"></div><div class="half b"></div><div class="badge">在读 4</div></div><div class="name">全部书籍</div><div class="sub">5 本</div></div>
+          <div class="card"><div class="collage" style="background:#f0f2f5"></div><div class="name">Fiction</div><div class="sub">0 本</div></div>
+        </div>
+        <div style="height:10px"></div>
+      </div></div>
+      <p class="note">整块删掉。空态、导入、备份这些说明留在各自入口里。</p>
+    </div>
+  </div>
+
+  <h2>改动清单</h2>
+  <table>
+    <tr><th style="width:34%">文件</th><th>改动</th></tr>
+    <tr><td><code>lib/ui/app_shell.dart</code></td><td>删手机端 AppBar；<code>SafeArea(top: true)</code>；宽屏侧栏品牌保留</td></tr>
+    <tr><td><code>lib/ui/screens/bookshelf_screen.dart</code></td><td>删页脚 sliver；搜索胶囊去「书城」并修对齐；组内菜单加「移出分组」</td></tr>
+    <tr><td><code>test/app_widget_test.dart</code></td><td>「阅读」标题断言改为书架标题；品牌标志断言随 AppBar 移除调整</td></tr>
+    <tr><td><code>test/bookshelf_layout_test.dart</code></td><td>新增：组内「移出分组」把书退回全部书籍；胶囊内 hint 垂直居中</td></tr>
+  </table>
+
+  <div class="rec" style="margin-top:22px">
+    <strong>推荐</strong>：以上四项一次改完。它们都在同一个界面顶部区域，改完一次真机走查即可收口；「移出分组」是唯一涉及行为的一项，单独补两条回归测试钉住。
+  </div>
+</div>
+</body>
+</html>

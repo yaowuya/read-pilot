@@ -163,4 +163,53 @@ void main() {
     expect(rankOf('public-fusheng'), lessThan(rankOf('public-renjian')));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('a grouped book can leave its group without leaving the shelf', (
+    tester,
+  ) async {
+    final group = (await tester.runAsync(() async {
+      final created = await controller.createShelfGroup('散文');
+      await controller.setShelfGroupMembership(
+        created.id,
+        'public-fusheng',
+        true,
+      );
+      return created;
+    }))!;
+    await pumpShelf(tester);
+    await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
+
+    await tester.tap(find.byTooltip('浮生六记的更多操作'));
+    await tester.pumpAndSettle();
+    // Inside a group the menu offers 移出分组 next to 移出书架: the first only
+    // drops the membership, the second deletes the book.
+    expect(find.text('移出分组'), findsOneWidget);
+    await tester.tap(find.text('移出分组'));
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.shelfGroups.single.containsBook('public-fusheng'),
+      isFalse,
+    );
+    // The book is still on the shelf, just no longer inside the group.
+    expect(controller.books.map((book) => book.id), contains('public-fusheng'));
+    expect(find.byKey(const Key('book-public-fusheng')), findsNothing);
+    expect(find.text('分组里还没有书'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the shelf pill centres its hint and has no 书城 action', (
+    tester,
+  ) async {
+    await pumpShelf(tester);
+    final field = tester.getRect(find.byKey(const Key('shelf-search')));
+    final hint = tester.getRect(find.text('搜索书名或作者'));
+    // isCollapsed left the hint 6.5px above the centre of the 38px pill.
+    expect((hint.center.dy - field.center.dy).abs(), lessThan(1));
+    expect(find.byKey(const Key('shelf-discover')), findsNothing);
+    expect(find.text('书城'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

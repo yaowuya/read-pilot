@@ -166,7 +166,6 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
               children: [
                 _SearchPill(
                   onChanged: (value) => setState(() => _query = value),
-                  onDiscover: widget.onDiscover,
                 ),
                 const SizedBox(height: 8),
                 if (scope == _ShelfScope.cards)
@@ -341,32 +340,6 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
               ),
             ),
           const SliverToBoxAdapter(child: SizedBox(height: 28)),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(padding, 0, padding, 32),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.cloud_off_outlined,
-                    size: 16,
-                    color: AppColors.muted,
-                  ),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '书与阅读记录，安心留在本机。',
-                      style: TextStyle(fontSize: 12, color: AppColors.muted),
-                    ),
-                  ),
-                  if (!compact)
-                    TextButton(
-                      onPressed: widget.onDiscover,
-                      child: const Text('发现下一本  →'),
-                    ),
-                ],
-              ),
-            ),
-          ),
         ],
       );
     },
@@ -535,6 +508,10 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
     itemBuilder: (_) => [
       const PopupMenuItem(value: 'details', child: Text('书籍信息')),
       const PopupMenuItem(value: 'groups', child: Text('加入分组')),
+      // Inside a group the book has to be reachable from the default shelf
+      // again; removing it from the shelf would delete the book itself.
+      if (_scope == _ShelfScope.group && _selectedGroupId != null)
+        const PopupMenuItem(value: 'leave', child: Text('移出分组')),
       const PopupMenuItem(value: 'remove', child: Text('移出书架')),
     ],
     onSelected: (value) async {
@@ -544,6 +521,20 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
       }
       if (value == 'groups') {
         _editBookGroups(book);
+        return;
+      }
+      if (value == 'leave') {
+        final groupId = _selectedGroupId;
+        if (groupId == null) return;
+        try {
+          await widget.controller.setShelfGroupMembership(
+            groupId,
+            book.id,
+            false,
+          );
+        } catch (error) {
+          if (mounted) showMessage(context, errorMessage(error));
+        }
         return;
       }
       if (!await confirmRemoval(
@@ -562,12 +553,10 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
   );
 }
 
-/// The wechat-reading style search pill: one rounded field with a 书城 action
-/// on its right that leads to the discover page.
+/// The wechat-reading style search pill: one rounded field that fills the row.
 class _SearchPill extends StatelessWidget {
-  const _SearchPill({required this.onChanged, required this.onDiscover});
+  const _SearchPill({required this.onChanged});
   final ValueChanged<String> onChanged;
-  final VoidCallback onDiscover;
   @override
   Widget build(BuildContext context) => Container(
     height: 38,
@@ -587,8 +576,13 @@ class _SearchPill extends StatelessWidget {
             onChanged: onChanged,
             textAlignVertical: TextAlignVertical.center,
             style: const TextStyle(fontSize: 13.5),
+            // isDense + zero padding keeps the hint centred in the 38px pill.
+            // isCollapsed squeezed the field to 20px and left the hint 6.5px
+            // above the centre, and the theme's vertical padding would add
+            // another 14px on each side.
             decoration: const InputDecoration(
-              isCollapsed: true,
+              isDense: true,
+              contentPadding: EdgeInsets.zero,
               border: InputBorder.none,
               enabledBorder: InputBorder.none,
               focusedBorder: InputBorder.none,
@@ -598,21 +592,7 @@ class _SearchPill extends StatelessWidget {
             ),
           ),
         ),
-        Container(width: 1, height: 16, color: AppColors.line),
-        TextButton(
-          key: const Key('shelf-discover'),
-          onPressed: onDiscover,
-          style: TextButton.styleFrom(
-            minimumSize: const Size(0, 36),
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            foregroundColor: AppColors.ink,
-            textStyle: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          child: const Text('书城'),
-        ),
+        const SizedBox(width: 14),
       ],
     ),
   );
