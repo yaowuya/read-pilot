@@ -47,7 +47,10 @@ void main() {
     // The phone layout has no global brand bar: each screen owns its header.
     expect(find.bySemanticsLabel('阅读标志'), findsNothing);
     expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
-    expect(find.byTooltip('批量导入 TXT 或 EPUB'), findsOneWidget);
+    // The draft's shelf header carries a circular 添加 button; import, search
+    // and group management all live behind it.
+    expect(find.byKey(const Key('shelf-add')), findsOneWidget);
+    expect(find.byKey(const Key('shelf-search-action')), findsOneWidget);
     // The draft's tab bar is hand drawn: three tabs, no Material NavigationBar.
     expect(find.byKey(const Key('nav-0')), findsOneWidget);
     expect(find.byKey(const Key('nav-2')), findsOneWidget);

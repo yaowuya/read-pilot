@@ -35,7 +35,11 @@ void main() {
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('shelf-group-manage')));
+    // 管理分组 moved behind the 添加 sheet on the root shelf; the group row
+    // keeps its own entry once a group is open.
+    await tester.tap(find.byKey(const Key('shelf-add')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-add-groups')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('shelf-group-add')));
     await tester.pumpAndSettle();
@@ -46,14 +50,21 @@ void main() {
     await tester.tap(find.byKey(const Key('shelf-group-close')));
     await tester.pumpAndSettle();
 
-    // The shelf switches to one card per group once a group exists.
+    // The shelf gains one card per group once a group exists, and the books
+    // that still belong to no group keep their place below the cards.
     expect(find.byKey(Key('shelf-group-${group.id}')), findsOneWidget);
     expect(find.byKey(const Key('shelf-group-all')), findsOneWidget);
-    expect(find.byKey(const Key('book-public-fusheng')), findsNothing);
     expect(find.text('默认'), findsOneWidget);
     expect(find.text('进度'), findsOneWidget);
     expect(find.text('书名'), findsOneWidget);
     expect(find.text('分类'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('book-public-fusheng')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
 
     await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
     await tester.pumpAndSettle();
@@ -83,6 +94,13 @@ void main() {
     await tester.tap(find.byKey(const Key('shelf-group-membership-close')));
     await tester.pumpAndSettle();
 
+    // The header scrolls with the grid, so bring it back before tapping 返回.
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('shelf-scope-back')),
+      -180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('shelf-scope-back')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('shelf-group-${group.id}')));

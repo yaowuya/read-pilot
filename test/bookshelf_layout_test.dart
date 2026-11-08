@@ -212,4 +212,185 @@ void main() {
     expect(find.text('书城'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('the filter line narrows the shelf by reading status', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await controller.savePosition(
+        'public-fusheng',
+        const ReadingPosition(chapterIndex: 1),
+        finished: true,
+      );
+      await controller.savePosition(
+        'public-zhaohua',
+        const ReadingPosition(chapterIndex: 0),
+      );
+    });
+    await pumpShelf(tester);
+
+    expect(find.byKey(const Key('shelf-status-filter')), findsOneWidget);
+    expect(find.byKey(const Key('shelf-count')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('shelf-status-filter')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-status-reading')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('book-public-zhaohua')), findsOneWidget);
+    expect(find.byKey(const Key('book-public-fusheng')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('shelf-status-filter')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-status-finished')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
+    expect(find.byKey(const Key('book-public-zhaohua')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('shelf-status-filter')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-status-all')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('book-public-zhaohua')), findsOneWidget);
+    expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an empty status filter offers a way back', (tester) async {
+    await pumpShelf(tester);
+    await tester.tap(find.byKey(const Key('shelf-status-filter')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-status-finished')));
+    await tester.pumpAndSettle();
+
+    // Nothing on this shelf has been finished, and the draft says so plainly.
+    expect(find.text('暂时没有已读的书'), findsOneWidget);
+    await tester.tap(find.text('查看全部状态'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('长按 a book opens 整理书架 and the batch bar', (tester) async {
+    await pumpShelf(tester);
+    await tester.longPress(find.byKey(const Key('book-public-fusheng')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('shelf-selection-title')), findsOneWidget);
+    expect(find.text('已选 1 本'), findsOneWidget);
+    expect(find.byKey(const Key('shelf-batch-remove')), findsOneWidget);
+    expect(find.byKey(const Key('shelf-batch-group')), findsOneWidget);
+    // A picked book shows its check mark, the others keep an empty dot.
+    expect(
+      find.byKey(const Key('shelf-select-public-fusheng')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('shelf-select-all')));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 3 本'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('shelf-select-done')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('shelf-selection-title')), findsNothing);
+    expect(find.byKey(const Key('shelf-title')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('整理书架 groups the picked books through the batch bar', (
+    tester,
+  ) async {
+    await tester.runAsync(() => controller.createShelfGroup('散文'));
+    await pumpShelf(tester);
+
+    await tester.tap(find.byKey(const Key('shelf-select')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('book-public-fusheng')));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 本'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('shelf-batch-group')));
+    await tester.pumpAndSettle();
+    final group = controller.shelfGroups.single;
+    await tester.tap(find.byKey(Key('shelf-group-target-${group.id}')));
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.shelfGroups.single.containsBook('public-fusheng'),
+      isTrue,
+    );
+    // Grouping leaves 整理书架 and shows the result on the root shelf.
+    expect(find.byKey(const Key('shelf-selection-title')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the trailing card opens the add sheet and the group picker', (
+    tester,
+  ) async {
+    await pumpShelf(tester);
+    // The add card sits after the last book, so bring it into the viewport
+    // before tapping: an off-screen sliver child has no hit test point.
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('shelf-add-card')),
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-add-card')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('shelf-add-import')), findsOneWidget);
+    expect(find.byKey(const Key('shelf-add-groups')), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+
+    // Inside a group the same slot adds books from the shelf instead.
+    final group = (await tester.runAsync(
+      () => controller.createShelfGroup('散文'),
+    ))!;
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('shelf-group-add-books')), findsOneWidget);
+    expect(find.byKey(const Key('shelf-add-card')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the shelf footer explains how to tidy it', (tester) async {
+    await pumpShelf(tester);
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('shelf-foot')),
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('每一本书，都有自己的位置'), findsOneWidget);
+
+    final group = (await tester.runAsync(
+      () => controller.createShelfGroup('散文'),
+    ))!;
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('shelf-foot')),
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('长按书籍或分组，即可整理书架'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.byKey(Key('shelf-group-${group.id}')),
+      -160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('shelf-foot')),
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('0 本书 · 散文'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

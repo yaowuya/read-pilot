@@ -95,7 +95,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('批量导入 TXT 或 EPUB'));
+    await tester.tap(find.byKey(const Key('shelf-add')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-add-import')));
     await tester.pumpAndSettle();
     // The shelf's import button now opens the draft's import page first.
     await tester.tap(find.byKey(const Key('import-pick-files')));
