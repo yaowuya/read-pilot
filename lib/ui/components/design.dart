@@ -290,6 +290,7 @@ class SearchPill extends StatelessWidget {
     this.focusNode,
     this.autofocus = false,
     this.trailing,
+    this.fieldKey,
   });
 
   final String hintText;
@@ -299,6 +300,10 @@ class SearchPill extends StatelessWidget {
   final FocusNode? focusNode;
   final bool autofocus;
   final Widget? trailing;
+
+  /// Key placed on the inner [TextField], so callers can target the input
+  /// itself instead of the outer pill.
+  final Key? fieldKey;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -315,6 +320,7 @@ class SearchPill extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: TextField(
+            key: fieldKey,
             controller: controller,
             focusNode: focusNode,
             autofocus: autofocus,

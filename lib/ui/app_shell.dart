@@ -218,6 +218,7 @@ class _AppShellState extends State<AppShell> {
               onOpen: _open,
               onSources: _sources,
               onBack: () => _select(0),
+              onImport: _importScreen,
             ),
             ProfileScreen(
               controller: widget.controller,

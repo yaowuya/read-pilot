@@ -10,6 +10,7 @@ import 'package:read_pilot/domain/book_source.dart';
 import 'package:read_pilot/domain/explore_kind.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/screens/discover_screen.dart';
+import 'package:read_pilot/ui/screens/search_screen.dart';
 import 'package:sembast/sembast_memory.dart';
 
 Book _book({
@@ -58,7 +59,7 @@ String _richExploreUrl() => const JsonEncoder().convert([
   {'title': '登录', 'type': 'button', 'action': 'login()'},
 ]);
 
-/// 发现页的测试替身：书源、分组、分类取值都在内存里，不发真实请求。
+/// 发现页的测试替身：书源、分组、分类取值、搜索历史都在内存里，不发真实请求。
 class _ExploreController extends AppController {
   _ExploreController(
     super.repository,
@@ -71,6 +72,7 @@ class _ExploreController extends AppController {
   final selections = <ExploreMainSelection>[];
   final savedInfo = <String, Map<String, String>>{};
   final explored = <({String source, String kind, int page})>[];
+  final history = <String>[];
   Completer<void>? pendingExplore;
 
   BookSource sourceFor(String id) =>
@@ -123,6 +125,19 @@ class _ExploreController extends AppController {
   }
 
   @override
+  Future<List<String>> searchHistory() async => List.unmodifiable(history);
+
+  @override
+  Future<List<String>> rememberSearch(String keyword) async {
+    history.removeWhere((item) => item.toLowerCase() == keyword.toLowerCase());
+    history.insert(0, keyword);
+    return List.unmodifiable(history);
+  }
+
+  @override
+  Future<void> clearSearchHistory() async => history.clear();
+
+  @override
   List<SourceExploreCategory> get exploreCategories => const [];
 
   @override
@@ -166,6 +181,9 @@ Future<_ExploreController> _pumpDiscover(
   required List<BookSource> sources,
   Size size = const Size(800, 1200),
   VoidCallback? onBack,
+  VoidCallback? onSources,
+  VoidCallback? onImport,
+  List<String> history = const [],
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -185,6 +203,7 @@ Future<_ExploreController> _pumpDiscover(
       installed: sources,
     );
   });
+  controller.history.addAll(history);
   addTearDown(() async {
     controller.dispose();
     await database.close();
@@ -195,14 +214,21 @@ Future<_ExploreController> _pumpDiscover(
         body: DiscoverScreen(
           controller: controller,
           onDetails: (_) {},
-          onSources: () {},
+          onSources: onSources ?? () {},
           onBack: onBack,
+          onImport: onImport,
         ),
       ),
     ),
   );
   await tester.pumpAndSettle();
   return controller;
+}
+
+/// 根层点开一条书源，进入它的分类格子（书源层）。
+Future<void> _openSourceLayer(WidgetTester tester, String sourceUrl) async {
+  await tester.tap(find.byKey(ValueKey('discover-source-$sourceUrl')));
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -216,13 +242,11 @@ void main() {
     'https://beta.example',
     '贝塔书源',
     group: '都市',
-    explore: '玄幻::/xuanhuan\n都市::/dushi',
+    explore: '玄幻::/xuanhuan\\n都市::/dushi',
   );
   final gamma = _source('https://gamma.example', '伽马书源');
 
-  testWidgets('browse mode lists one section per explore source', (
-    tester,
-  ) async {
+  testWidgets('browse mode lists one row per explore source', (tester) async {
     await _pumpDiscover(tester, sources: [alpha, beta, gamma]);
 
     expect(find.text('发现'), findsOneWidget);
@@ -230,11 +254,14 @@ void main() {
     expect(find.text('贝塔书源'), findsOneWidget);
     // 伽马书源没有声明发现规则，不算发现书源。
     expect(find.text('伽马书源'), findsNothing);
-    expect(find.text('2 个书源，2 个分组'), findsOneWidget);
+    // 设计稿在「浏览书源」右侧标出已启用条数。
+    expect(find.text('2 个已启用'), findsOneWidget);
+    // 有分类的书源标「分类」，只有搜索能力的标「仅搜索」。
+    expect(find.text('分类'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a source with only discover rules explains it has no kinds', (
+  testWidgets('a source with only discover rules is search-only', (
     tester,
   ) async {
     await _pumpDiscover(
@@ -253,14 +280,15 @@ void main() {
     );
 
     expect(find.text('只有规则的书源'), findsOneWidget);
-    expect(find.text('这条书源没有声明发现分类。'), findsOneWidget);
+    // 没有 exploreUrl 就没有分类可逛，行上直接标成「仅搜索」。
+    expect(find.text('仅搜索'), findsOneWidget);
+    expect(find.text('支持按书名、作者搜索'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a source with explore rules renders its kind tiles', (
-    tester,
-  ) async {
+  testWidgets('opening a source shows its kind tiles', (tester) async {
     final controller = await _pumpDiscover(tester, sources: [alpha]);
+    await _openSourceLayer(tester, 'https://alpha.example');
 
     // 分类格子用「书源 + 分类标题」组成 key，避免和分组名、书源分组标签同名。
     for (final title in ['玄幻', '榜单', '关键字', '登录']) {
@@ -290,6 +318,7 @@ void main() {
     'a text kind saves what the user typed into the source info map',
     (tester) async {
       final controller = await _pumpDiscover(tester, sources: [alpha]);
+      await _openSourceLayer(tester, 'https://alpha.example');
 
       final field = find.byKey(
         const ValueKey('explore-kind-input-https://alpha.example-关键字'),
@@ -306,6 +335,7 @@ void main() {
     tester,
   ) async {
     final controller = await _pumpDiscover(tester, sources: [alpha]);
+    await _openSourceLayer(tester, 'https://alpha.example');
 
     // 未保存过取值时显示首个候选值（legado `chars.first()`）。
     await tester.tap(find.text('完结完结'));
@@ -339,7 +369,7 @@ void main() {
 
     expect(find.byKey(const Key('discover-source-select')), findsOneWidget);
     expect(controller.selections.last.showContent, isTrue);
-    // 内容模式只列出当前书源的分类标签，不再铺开所有书源的分节。
+    // 内容模式只列出当前书源的分类标签，不再铺开所有书源的行。
     expect(
       find.byKey(const ValueKey('discover-source-https://beta.example')),
       findsNothing,
@@ -378,6 +408,7 @@ void main() {
 
   testWidgets('a category page paginates and can be closed', (tester) async {
     final controller = await _pumpDiscover(tester, sources: [alpha]);
+    await _openSourceLayer(tester, 'https://alpha.example');
 
     await tester.tap(
       find.byKey(const ValueKey('explore-kind-https://alpha.example-玄幻')),
@@ -396,7 +427,12 @@ void main() {
 
     await tester.tap(find.byKey(const Key('discover-page-back')));
     await tester.pumpAndSettle();
+    // 关闭分类页回到书源层，标题是书源名。
     expect(find.text('阿尔法书源'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('discover-detail-back')));
+    await tester.pumpAndSettle();
+    expect(find.text('浏览书源'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -410,30 +446,102 @@ void main() {
       ],
     );
 
+    // 脚本分类不在本版本能力范围：行上说明原因，并归为「仅搜索」。
     expect(find.text('该书的发现分类由脚本生成，当前版本无法加载。'), findsOneWidget);
+    expect(find.text('仅搜索'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('search opens as a sheet and lists merged results', (
+  testWidgets('the search box opens the full search page with its keyword', (
     tester,
   ) async {
     await _pumpDiscover(tester, sources: [alpha]);
 
-    await tester.tap(find.byKey(const Key('discover-search')));
-    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('discover-search-field')),
       '测试',
     );
-    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.tap(find.byKey(const Key('discover-search-submit')));
+    await tester.pumpAndSettle();
+
+    // 设计稿：搜索是整页，不再在发现页内联出结果。
+    expect(find.byType(SearchScreen), findsOneWidget);
+    expect(find.byKey(const Key('search-submit')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('search-submit')));
     await tester.pumpAndSettle();
 
     expect(find.text('找到 1 本'), findsOneWidget);
-    // 书名在书封和结果行各有一处，用结果行的 key 精确定位。
     expect(
-      find.byKey(const ValueKey('discover-search-result-found-book')),
+      find.byKey(const ValueKey('search-result-found-book')),
       findsOneWidget,
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a search-only source opens the search page scoped to it', (
+    tester,
+  ) async {
+    await _pumpDiscover(
+      tester,
+      sources: [
+        BookSource({
+          'bookSourceUrl': 'https://partial.example',
+          'bookSourceName': '只有规则的书源',
+          'ruleExplore': {'bookList': '.list'},
+        }),
+      ],
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('discover-source-https://partial.example')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SearchScreen), findsOneWidget);
+    expect(find.text('只在「只有规则的书源」中查找'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('recent searches only render once there is history', (
+    tester,
+  ) async {
+    final controller = await _pumpDiscover(
+      tester,
+      sources: [alpha],
+      history: ['斗破', '遮天'],
+    );
+
+    expect(find.text('最近搜索'), findsOneWidget);
+    expect(find.byKey(const ValueKey('discover-history-斗破')), findsOneWidget);
+
+    // 点历史 chip 直接带着关键词进搜索页。
+    await tester.tap(find.byKey(const ValueKey('discover-history-斗破')));
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchScreen), findsOneWidget);
+    expect(controller.history, ['斗破', '遮天']);
+
+    // 搜索页的返回键是设计稿的圆形按钮，不是系统返回箭头。
+    await tester.tap(find.byKey(const Key('topbar-back')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('discover-history-clear')));
+    await tester.pumpAndSettle();
+    expect(find.text('最近搜索'), findsNothing);
+    expect(controller.history, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the add source button reaches source management', (
+    tester,
+  ) async {
+    var opens = 0;
+    await _pumpDiscover(tester, sources: [alpha], onSources: () => opens++);
+
+    await tester.tap(find.byKey(const Key('discover-add-source')));
+    await tester.pump();
+
+    expect(opens, 1);
     expect(tester.takeException(), isNull);
   });
 
@@ -451,10 +559,16 @@ void main() {
   testWidgets('no explore sources shows an empty state with a way forward', (
     tester,
   ) async {
-    await _pumpDiscover(tester, sources: const []);
+    var imports = 0;
+    await _pumpDiscover(tester, sources: const [], onImport: () => imports++);
 
-    expect(find.text('还没有可浏览的书源'), findsOneWidget);
-    expect(find.text('去管理书源'), findsOneWidget);
+    expect(find.text('添加书源，发现更多书'), findsOneWidget);
+    expect(find.text('添加书源'), findsOneWidget);
+    expect(find.text('可以先搜索书架与本地书籍'), findsOneWidget);
+
+    await tester.tap(find.text('导入本地书籍'));
+    await tester.pump();
+    expect(imports, 1);
     expect(tester.takeException(), isNull);
   });
 }
