@@ -6,12 +6,16 @@ import '../domain/book.dart';
 import 'components/book_details.dart';
 import 'components/brand_mark.dart';
 import 'components/common.dart';
+import 'screens/app_settings_screen.dart';
+import 'screens/backup_screen.dart';
 import 'screens/bookshelf_screen.dart';
 import 'screens/discover_screen.dart';
+import 'screens/import_screen.dart';
 import 'screens/notes_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/reader_screen.dart';
 import 'screens/reading_history_screen.dart';
+import 'screens/search_screen.dart';
 import 'screens/sources_screen.dart';
 import 'theme.dart';
 
@@ -29,11 +33,12 @@ class _AppShellState extends State<AppShell> {
   int _selected = 0;
   bool _importing = false;
   bool _opening = false;
-  static const _labels = ['书架', '发现', '书源', '我的'];
+
+  // 设计稿固定底部三项；书源管理属于维护型功能，按稿收进「我的」。
+  static const _labels = ['书架', '发现', '我的'];
   static const _icons = [
     Icons.auto_stories_outlined,
     Icons.explore_outlined,
-    Icons.language_outlined,
     Icons.person_outline,
   ];
 
@@ -121,47 +126,72 @@ class _AppShellState extends State<AppShell> {
     }
   }
 
-  void _notes() => Navigator.push(
-    context,
-    MaterialPageRoute<void>(
-      builder: (_) => NotesScreen(
-        controller: widget.controller,
-        onOpen: (note) {
-          final book = widget.controller.book(note.bookId);
-          if (book == null) return;
-          _open(
-            book,
-            position: ReadingPosition(
-              chapterIndex: note.chapterIndex,
-              paragraphIndex: note.paragraphIndex,
-            ),
-          );
-        },
-      ),
+  void _push(Widget screen) =>
+      Navigator.push(context, MaterialPageRoute<void>(builder: (_) => screen));
+
+  void _sources() => _push(SourcesScreen(controller: widget.controller));
+
+  void _importScreen() => _push(
+    ImportScreen(
+      controller: widget.controller,
+      onPickFiles: _import,
+      onSources: _sources,
     ),
   );
 
-  void _history() => Navigator.push(
-    context,
-    MaterialPageRoute<void>(
-      builder: (_) => ReadingHistoryScreen(
-        controller: widget.controller,
-        onOpen: (activity) {
-          final book = widget.controller.book(activity.bookId);
-          if (book == null ||
-              book.sourceId != activity.sourceId ||
-              activity.chapterIndex < 0 ||
-              activity.chapterIndex >= book.chapters.length ||
-              book.chapters[activity.chapterIndex].id != activity.chapterId) {
-            showMessage(context, '书籍来源或章节已变化，无法打开这条阅读足迹。');
-            return;
-          }
-          _open(
-            book,
-            position: ReadingPosition(chapterIndex: activity.chapterIndex),
-          );
-        },
-      ),
+  void _backup() => _push(BackupScreen(controller: widget.controller));
+
+  void _settings() => _push(
+    AppSettingsScreen(
+      controller: widget.controller,
+      onSources: _sources,
+      onBackup: _backup,
+    ),
+  );
+
+  void _search() => _push(
+    SearchScreen(
+      controller: widget.controller,
+      onDetails: _details,
+      onOpen: _open,
+    ),
+  );
+
+  void _notes() => _push(
+    NotesScreen(
+      controller: widget.controller,
+      onOpen: (note) {
+        final book = widget.controller.book(note.bookId);
+        if (book == null) return;
+        _open(
+          book,
+          position: ReadingPosition(
+            chapterIndex: note.chapterIndex,
+            paragraphIndex: note.paragraphIndex,
+          ),
+        );
+      },
+    ),
+  );
+
+  void _history() => _push(
+    ReadingHistoryScreen(
+      controller: widget.controller,
+      onOpen: (activity) {
+        final book = widget.controller.book(activity.bookId);
+        if (book == null ||
+            book.sourceId != activity.sourceId ||
+            activity.chapterIndex < 0 ||
+            activity.chapterIndex >= book.chapters.length ||
+            book.chapters[activity.chapterIndex].id != activity.chapterId) {
+          showMessage(context, '书籍来源或章节已变化，无法打开这条阅读足迹。');
+          return;
+        }
+        _open(
+          book,
+          position: ReadingPosition(chapterIndex: activity.chapterIndex),
+        );
+      },
     ),
   );
 
@@ -178,20 +208,25 @@ class _AppShellState extends State<AppShell> {
               controller: widget.controller,
               onOpen: _open,
               onDetails: _details,
-              onImport: _import,
+              onImport: _importScreen,
               onDiscover: () => _select(1),
+              onSearch: _search,
             ),
             DiscoverScreen(
               controller: widget.controller,
               onDetails: _details,
-              onSources: () => _select(2),
+              onOpen: _open,
+              onSources: _sources,
               onBack: () => _select(0),
             ),
-            SourcesScreen(controller: widget.controller),
             ProfileScreen(
               controller: widget.controller,
               onNotes: _notes,
               onHistory: _history,
+              onSources: _sources,
+              onImport: _importScreen,
+              onBackup: _backup,
+              onSettings: _settings,
             ),
           ],
         );
@@ -290,6 +325,39 @@ class _AppShellState extends State<AppShell> {
                                   ),
                                 ),
                               ),
+                            const SizedBox(height: 14),
+                            Material(
+                              color: Colors.transparent,
+                              borderRadius: BorderRadius.circular(10),
+                              child: InkWell(
+                                key: const Key('nav-sources'),
+                                borderRadius: BorderRadius.circular(10),
+                                onTap: _sources,
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 18,
+                                    vertical: 15,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.language_outlined,
+                                        size: 21,
+                                        color: AppColors.muted,
+                                      ),
+                                      SizedBox(width: 16),
+                                      Text(
+                                        '书源管理',
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          color: AppColors.muted,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
                             const Spacer(),
                             Padding(
                               padding: const EdgeInsets.symmetric(
@@ -346,20 +414,81 @@ class _AppShellState extends State<AppShell> {
           ),
           bottomNavigationBar: wide
               ? null
-              : NavigationBar(
-                  selectedIndex: _selected,
-                  onDestinationSelected: _select,
-                  destinations: [
-                    for (var index = 0; index < _labels.length; index++)
-                      NavigationDestination(
-                        key: Key('nav-$index'),
-                        icon: Icon(_icons[index], size: 23),
-                        label: _labels[index],
-                      ),
-                  ],
-                ),
+              : _TabBar(selected: _selected, onSelect: _select),
         );
       },
+    ),
+  );
+}
+
+/// 设计稿 `.tabbar`：白底、三项等宽、选中项蓝字并在图标下方点一个小圆点。
+///
+/// 用自绘而非 `NavigationBar`，因为稿里的选中态是「文字变蓝 + 4px 圆点」而不是
+/// Material 的胶囊指示器；导航键 `nav-$index` 与宽屏侧栏保持一致。
+class _TabBar extends StatelessWidget {
+  const _TabBar({required this.selected, required this.onSelect});
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: const BoxDecoration(
+      color: Colors.white,
+      border: Border(top: BorderSide(color: AppColors.line)),
+    ),
+    child: SafeArea(
+      top: false,
+      child: SizedBox(
+        height: 56,
+        child: Row(
+          children: [
+            for (var index = 0; index < _AppShellState._labels.length; index++)
+              Expanded(
+                child: InkWell(
+                  key: Key('nav-$index'),
+                  onTap: () => onSelect(index),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _AppShellState._icons[index],
+                        size: 23,
+                        color: selected == index
+                            ? AppColors.blue
+                            : const Color(0xFF999FA9),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _AppShellState._labels[index],
+                        style: TextStyle(
+                          fontSize: 10,
+                          height: 1.1,
+                          fontWeight: selected == index
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                          color: selected == index
+                              ? AppColors.blue
+                              : const Color(0xFF999FA9),
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Container(
+                        width: 4,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: selected == index
+                              ? AppColors.blue
+                              : Colors.transparent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     ),
   );
 }

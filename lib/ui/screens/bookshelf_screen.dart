@@ -32,12 +32,14 @@ class BookshelfScreen extends StatefulWidget {
     required this.onDetails,
     required this.onImport,
     required this.onDiscover,
+    required this.onSearch,
   });
   final AppController controller;
   final ValueChanged<Book> onOpen;
   final ValueChanged<Book> onDetails;
   final VoidCallback onImport;
   final VoidCallback onDiscover;
+  final VoidCallback onSearch;
   @override
   State<BookshelfScreen> createState() => _BookshelfScreenState();
 }

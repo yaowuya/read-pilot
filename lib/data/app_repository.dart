@@ -1479,6 +1479,41 @@ class AppRepository {
     });
   }
 
+  /// Recent search keywords, newest first, capped at [maxSearchHistory].
+  ///
+  /// Legado keeps the same list in `searchHistory` preferences. It is small,
+  /// purely local and cheap to rewrite, so a single meta record is enough —
+  /// no separate store and no index.
+  static const maxSearchHistory = 12;
+
+  Future<List<String>> searchHistory() async {
+    final json = await _meta.record('search_history').get(database);
+    final entries = json?['entries'];
+    if (entries is! List) return const [];
+    return [
+      for (final entry in entries)
+        if (entry is String && entry.trim().isNotEmpty) entry,
+    ];
+  }
+
+  Future<List<String>> rememberSearch(String keyword) async {
+    final trimmed = keyword.trim();
+    if (trimmed.isEmpty) return searchHistory();
+    final current = await searchHistory();
+    final next = <String>[
+      trimmed,
+      for (final item in current)
+        if (item != trimmed) item,
+    ];
+    final capped = next.take(maxSearchHistory).toList();
+    await _meta.record('search_history').put(database, {'entries': capped});
+    return capped;
+  }
+
+  Future<void> clearSearchHistory() async {
+    await _meta.record('search_history').delete(database);
+  }
+
   Future<void> deleteSource(String id) async {
     await database.transaction((transaction) async {
       await _sources.record(id).delete(transaction);

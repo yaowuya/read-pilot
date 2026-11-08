@@ -97,6 +97,9 @@ void main() {
 
     await tester.tap(find.byTooltip('批量导入 TXT 或 EPUB'));
     await tester.pumpAndSettle();
+    // The shelf's import button now opens the draft's import page first.
+    await tester.tap(find.byKey(const Key('import-pick-files')));
+    await tester.pumpAndSettle();
 
     expect(controller.books, hasLength(5));
     expect(

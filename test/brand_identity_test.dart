@@ -42,11 +42,16 @@ void main() {
     expect(find.bySemanticsLabel('阅读标志'), findsOneWidget);
   });
 
-  test('the interface preserves the original blue and cool-gray palette', () {
-    expect(AppColors.ink, const Color(0xFF252932));
-    expect(AppColors.blue, const Color(0xFF2468DE));
-    expect(AppColors.background, const Color(0xFFF7F8FA));
-    expect(AppColors.softBlue, const Color(0xFFEDF3FF));
+  test('the interface uses the design-draft blue and cool-gray palette', () {
+    // 设计稿（docs/阅读助手_完整设计稿.html）把主操作色定为 #2878F0、正文
+    // #23262C、页面底 #F3F4F6，用户要求整站按稿重构，因此这里断言的是稿中
+    // 的色值而不是改版前的 #2468DE/#F7F8FA。
+    expect(AppColors.ink, const Color(0xFF23262C));
+    expect(AppColors.blue, const Color(0xFF2878F0));
+    expect(AppColors.background, const Color(0xFFF3F4F6));
+    expect(AppColors.softBlue, const Color(0xFFEDF4FF));
+    expect(AppColors.line, const Color(0xFFEDF0F3));
+    expect(AppColors.muted, const Color(0xFF858B96));
     expect(appTheme().colorScheme.primary, AppColors.blue);
   });
 

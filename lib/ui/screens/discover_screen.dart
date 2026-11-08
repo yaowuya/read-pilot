@@ -31,12 +31,17 @@ class DiscoverScreen extends StatefulWidget {
     required this.controller,
     required this.onDetails,
     required this.onSources,
+    this.onOpen,
     this.onBack,
   });
 
   final AppController controller;
   final ValueChanged<Book> onDetails;
   final VoidCallback onSources;
+
+  /// Opens a search hit straight into the reader; falling back to book details
+  /// would add a step the discover list never needed.
+  final ValueChanged<Book>? onOpen;
   final VoidCallback? onBack;
 
   @override

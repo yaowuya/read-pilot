@@ -48,7 +48,10 @@ void main() {
     expect(find.bySemanticsLabel('阅读标志'), findsNothing);
     expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
     expect(find.byTooltip('批量导入 TXT 或 EPUB'), findsOneWidget);
-    expect(find.byType(NavigationBar), findsOneWidget);
+    // The draft's tab bar is hand drawn: three tabs, no Material NavigationBar.
+    expect(find.byKey(const Key('nav-0')), findsOneWidget);
+    expect(find.byKey(const Key('nav-2')), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -172,8 +175,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('我的'));
     await tester.pumpAndSettle();
-    expect(find.text('阅读足迹'), findsOneWidget);
-    await tester.tap(find.text('阅读足迹'));
+    expect(find.text('阅读记录'), findsOneWidget);
+    await tester.tap(find.text('阅读记录'));
     await tester.pumpAndSettle();
     expect(find.text('每一次翻页，都在这里'), findsOneWidget);
     expect(tester.takeException(), isNull);

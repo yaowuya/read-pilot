@@ -1470,6 +1470,15 @@ class AppController extends ChangeNotifier {
   Future<void> saveExploreSelection(ExploreMainSelection selection) =>
       repository.saveExploreSelection(selection);
 
+  /// Recent search keywords, newest first.
+  Future<List<String>> searchHistory() => repository.searchHistory();
+
+  /// Records [keyword] at the top of the history and returns the new list.
+  Future<List<String>> rememberSearch(String keyword) =>
+      repository.rememberSearch(keyword);
+
+  Future<void> clearSearchHistory() => repository.clearSearchHistory();
+
   Future<void> setSourceEnabledExplore(BookSource source, bool value) async {
     if (!_sources.any((item) => item.id == source.id)) return;
     await repository.setSourceEnabledExplore(source.id, value);
