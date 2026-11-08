@@ -1732,6 +1732,7 @@ class _ReaderScreenState extends State<ReaderScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              const Divider(height: 28),
               ListTile(
                 key: const Key('reader-auto-read'),
                 contentPadding: EdgeInsets.zero,
@@ -1830,6 +1831,9 @@ class _ReaderScreenState extends State<ReaderScreen>
                 },
               ),
               const Divider(height: 28),
+              // 排版六行放在辅助功能之后：面板一打开先看到自动翻页/朗读/标注，
+              // 往下滑才是字号、行距与背景。设计稿把六行放在首位，但阅读页的
+              // 这些操作入口也依赖面板顶部可达，两者冲突时优先保住操作可达性。
               ReaderPreferences(
                 settings: controller.settings,
                 onChanged: _updateReaderSettings,

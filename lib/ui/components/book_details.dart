@@ -9,6 +9,7 @@ import 'common.dart';
 import 'design.dart';
 import 'reader_cache_cleanup_sheet.dart';
 import 'reader_cache_sheet.dart';
+import 'reading_assistant_sheet.dart';
 import 'source_switch_sheet.dart';
 
 enum _DetailAction { switchSource, refreshCover, cache, manageCache, textRules }
@@ -384,6 +385,97 @@ class _BookDetailsState extends State<BookDetails> {
     );
   }
 
+  /// 设计稿的「读之前，先认识这本书」入口。导读只用本机已有信息——简介、章数、
+  /// 已读章数与笔记条数——所以打开的是一个本地回顾面板，不连模型。
+  Widget _assistantEntry(Book book, Book? shelfBook) {
+    final live = shelfBook ?? book;
+    return Padding(
+      padding: const EdgeInsets.only(top: 18),
+      child: Material(
+        color: const Color(0xFFF0F5FD),
+        borderRadius: BorderRadius.circular(9),
+        child: InkWell(
+          key: const Key('book-ai-entry'),
+          borderRadius: BorderRadius.circular(9),
+          onTap: () => _openAssistant(live),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.auto_awesome,
+                  size: 20,
+                  color: Color(0xFF6A93CC),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '读之前，先认识这本书',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF4872AB),
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        '基于简介、目录和你的笔记，做一次本地回顾',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFF91A4C0),
+                          height: 1.7,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right,
+                  size: 17,
+                  color: Color(0xFFB0BECE),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openAssistant(Book book) {
+    if (_busyAction != null) return;
+    final notes = widget.controller.bookmarks
+        .where((note) => note.bookId == book.id)
+        .toList();
+    final chapterTitle = book.chapters.isEmpty
+        ? '还没有加载目录'
+        : book
+              .chapters[book.position.chapterIndex.clamp(
+                0,
+                book.chapters.length - 1,
+              )]
+              .title;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      constraints: const BoxConstraints(maxWidth: 620),
+      builder: (_) => Theme(
+        data: appTheme(),
+        child: ReadingAssistantSheet(
+          book: book,
+          chapterTitle: chapterTitle,
+          paragraph: book.description,
+          readChapters: book.position.chapterIndex,
+          notes: notes,
+        ),
+      ),
+    );
+  }
+
   Widget _sourceNote(Book book) => Padding(
     padding: const EdgeInsets.only(top: 18, bottom: 10),
     child: Row(
@@ -481,6 +573,7 @@ class _BookDetailsState extends State<BookDetails> {
                 children: [
                   _hero(book, shelfBook),
                   _metrics(book),
+                  _assistantEntry(book, shelfBook),
                   _intro(book),
                   _rows(book),
                   if (_error != null)

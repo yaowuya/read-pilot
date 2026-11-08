@@ -67,6 +67,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('阅读记录'));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('reading-history-item-0')),
+      220,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reading-history-item-0')));
     await tester.pumpAndSettle();
     expect(find.textContaining('书籍来源或章节已变化'), findsOneWidget);
