@@ -308,7 +308,12 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
               builder: (context, constraints) {
                 // 键盘弹出或用户把面板拖到底时，可用高度只剩一两百像素：
                 // 这时只留标题行和筛选框，其余说明块收起，否则 Column 会溢出。
-                final compact = constraints.maxHeight < 420;
+                //
+                // 阈值必须明显低于「默认三分之二屏」的实际高度：1080x1920
+                // 的机器逻辑高度只有 640，扣掉系统栏再乘 .66 约剩 390，
+                // 按 420 判就会把正常打开的换源面板也当成键盘态，
+                // 书名、当前来源、筛选胶囊与页脚声明全被裁掉。
+                final compact = constraints.maxHeight < 320;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
