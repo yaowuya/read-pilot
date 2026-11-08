@@ -79,7 +79,8 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       await pumpDetails(tester, controller.book('cache-ui')!);
-      await tester.ensureVisible(find.byKey(const Key('book-manage-cache')));
+      await tester.tap(find.byKey(const Key('book-more')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('book-manage-cache')));
       await tester.pumpAndSettle();
 
@@ -117,6 +118,8 @@ void main() {
     tester,
   ) async {
     await pumpDetails(tester, controller.book('cache-ui')!);
+    await tester.tap(find.byKey(const Key('book-more')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('book-manage-cache')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('cache-clear-chapter-0')));
@@ -162,6 +165,8 @@ void main() {
     tester,
   ) async {
     await pumpDetails(tester, controller.book('cache-ui')!);
+    await tester.tap(find.byKey(const Key('book-more')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('book-manage-cache')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('cache-clear-chapter-0')));
@@ -193,6 +198,8 @@ void main() {
   testWidgets('local book has no cache clearing action', (tester) async {
     final local = controller.books.firstWhere((book) => !book.isRemote);
     await pumpDetails(tester, local);
+    await tester.tap(find.byKey(const Key('book-more')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('book-manage-cache')), findsNothing);
   });
 }

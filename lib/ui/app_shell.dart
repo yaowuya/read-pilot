@@ -76,8 +76,16 @@ class _AppShellState extends State<AppShell> {
     showDragHandle: true,
     backgroundColor: Colors.white,
     constraints: const BoxConstraints(maxWidth: 640),
-    builder: (_) =>
-        BookDetails(book: book, controller: widget.controller, onRead: _open),
+    builder: (_) => BookDetails(
+      book: book,
+      controller: widget.controller,
+      onRead: _open,
+      // 详情是抽屉，点「我的笔记」先把抽屉关掉再压栈笔记页，返回时落到原页面。
+      onOpenNotes: () {
+        Navigator.pop(context);
+        _notes();
+      },
+    ),
   );
 
   Future<List<LocalImportFile>?> _pickLocalFiles() async {
