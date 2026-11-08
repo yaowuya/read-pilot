@@ -79,6 +79,9 @@ class _ExploreController extends AppController {
       _installed.firstWhere((source) => source.id == id);
 
   @override
+  List<BookSource> get sources => _installed;
+
+  @override
   List<BookSource> get exploreSources => [
     for (final source in _installed)
       if (source.enabled && source.enabledExplore && source.hasExplore) source,
@@ -471,7 +474,9 @@ void main() {
     await tester.tap(find.byKey(const Key('search-submit')));
     await tester.pumpAndSettle();
 
-    expect(find.text('找到 1 本'), findsOneWidget);
+    // 设计稿的结果头是「N 本书 · 已搜索 X/Y 个源」，不是「找到 N 本」。
+    expect(find.byKey(const Key('search-results-head')), findsOneWidget);
+    expect(find.textContaining('本书'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('search-result-found-book')),
       findsOneWidget,
@@ -499,7 +504,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(SearchScreen), findsOneWidget);
-    expect(find.text('只在「只有规则的书源」中查找'), findsOneWidget);
+    // 设计稿把范围放在条件行：单源搜索时这里直接显示源名。
+    expect(find.byKey(const Key('search-scope-trigger')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('search-scope-trigger')),
+        matching: find.text('只有规则的书源'),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 

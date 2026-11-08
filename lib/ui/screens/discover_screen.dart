@@ -278,9 +278,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         builder: (_) => SearchScreen(
           controller: widget.controller,
           onDetails: widget.onDetails,
-          onOpen: widget.onOpen ?? widget.onDetails,
           initialQuery: initialQuery ?? _searchQuery.text.trim(),
           source: only,
+          onManageSources: widget.onSources,
         ),
       ),
     );

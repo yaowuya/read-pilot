@@ -161,7 +161,7 @@ class _AppShellState extends State<AppShell> {
     SearchScreen(
       controller: widget.controller,
       onDetails: _details,
-      onOpen: _open,
+      onManageSources: _sources,
     ),
   );
 
