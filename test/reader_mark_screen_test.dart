@@ -128,6 +128,64 @@ void main() {
     );
   });
 
+  testWidgets('selected text opens the local assistant instead of guessing', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await controller.addBook(
+        Book(
+          id: 'assistant-selection-book',
+          title: '回顾测试书',
+          author: '作者',
+          description: '',
+          category: '本地',
+          coverStyle: 0,
+          sourceLabel: '本地导入',
+          addedAt: DateTime.utc(2026),
+          chapters: [
+            Chapter(
+              id: 'assistant-chapter',
+              title: '第一章',
+              paragraphs: const ['春风又绿江南岸。'],
+            ),
+          ],
+        ),
+      );
+      await controller.updateSettings(
+        controller.settings.copyWith(flow: ReaderFlow.scrolling),
+      );
+    });
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(
+      ReadPilotApp(
+        controller: controller,
+        initialRoute: '/read/assistant-selection-book',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final selectionArea = tester.widget<SelectionArea>(
+      find.byType(SelectionArea).first,
+    );
+    selectionArea.onSelectionChanged!(const SelectedContent(plainText: '江南'));
+    await tester.pump();
+    await showChrome(tester);
+    await tester.tap(find.byKey(const Key('reader-settings')));
+    await tester.pumpAndSettle();
+
+    final entry = tester.widget<ListTile>(
+      find.byKey(const Key('reader-selected-explain')),
+    );
+    expect(entry.enabled, isTrue);
+    await tester.tap(find.byKey(const Key('reader-selected-explain')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('阅读助手'), findsOneWidget);
+    expect(find.text('本地回顾 · 不连接模型'), findsOneWidget);
+    expect(find.textContaining('江南'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('scrolling reader enables a unique selected-text annotation', (
     tester,
   ) async {
