@@ -1573,7 +1573,7 @@ class _ContinueReading extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    book.description,
+                    bookIntroText(book.description),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(

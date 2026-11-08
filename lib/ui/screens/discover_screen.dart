@@ -1121,6 +1121,7 @@ class _ExploreBookTile extends StatelessWidget {
       book.author,
       book.category,
     ].where((value) => value.trim().isNotEmpty).join(' · ');
+    final intro = bookIntroText(book.description);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1163,10 +1164,10 @@ class _ExploreBookTile extends StatelessWidget {
                         ),
                       ),
                     ],
-                    if (book.description.isNotEmpty) ...[
+                    if (intro.isNotEmpty) ...[
                       const SizedBox(height: 6),
                       Text(
-                        book.description,
+                        intro,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(

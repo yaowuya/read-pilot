@@ -318,9 +318,8 @@ class _BookDetailsState extends State<BookDetails> {
   );
 
   Widget _intro(Book book) {
-    final text = book.description.isEmpty
-        ? '书源未提供简介。添加后会按需加载目录与正文。'
-        : book.description;
+    final intro = bookIntroText(book.description);
+    final text = intro.isEmpty ? '书源未提供简介。添加后会按需加载目录与正文。' : intro;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -468,7 +467,7 @@ class _BookDetailsState extends State<BookDetails> {
         child: ReadingAssistantSheet(
           book: book,
           chapterTitle: chapterTitle,
-          paragraph: book.description,
+          paragraph: bookIntroText(book.description),
           readChapters: book.position.chapterIndex,
           notes: notes,
         ),

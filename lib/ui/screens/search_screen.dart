@@ -7,6 +7,7 @@ import '../../domain/book.dart';
 import '../../domain/book_source.dart';
 import '../../domain/search_merge.dart';
 import '../components/book_cover.dart';
+import '../components/common.dart';
 import '../components/design.dart';
 import '../theme.dart';
 
@@ -1181,6 +1182,7 @@ class _ResultRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final latest = book.chapters.isEmpty ? '' : book.chapters.last.title;
+    final intro = bookIntroText(book.description);
     final tags = <String>[
       if (book.category.trim().isNotEmpty) book.category,
       if (book.chapters.isNotEmpty) '${book.chapters.length} 章',
@@ -1299,7 +1301,7 @@ class _ResultRow extends StatelessWidget {
                   ],
                   const SizedBox(height: 9),
                   Text(
-                    book.description.trim().isEmpty ? '暂无简介' : book.description,
+                    intro.isEmpty ? '暂无简介' : intro,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
