@@ -11,6 +11,8 @@ import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/reader/reader_paragraph.dart';
 import 'package:sembast/sembast_memory.dart';
 
+import 'support/reader_chrome.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Database database;
@@ -54,8 +56,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-mark')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-mark-color-mint')));
@@ -84,16 +85,14 @@ void main() {
     await tester.pumpAndSettle();
 
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-mark')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-mark-save')));
     await tester.pumpAndSettle();
 
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-mark-manager')));
     await tester.pumpAndSettle();
 
@@ -117,8 +116,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
 
     expect(
       tester
@@ -170,8 +168,7 @@ void main() {
     selectionArea.onSelectionChanged!(const SelectedContent(plainText: '江南'));
     await tester.pump();
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
 
     final entry = tester.widget<ListTile>(
       find.byKey(const Key('reader-selected-explain')),
@@ -228,8 +225,7 @@ void main() {
     selectionArea.onSelectionChanged!(const SelectedContent(plainText: '江南'));
     await tester.pump();
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
 
     final entry = tester.widget<ListTile>(
       find.byKey(const Key('reader-selected-text-mark')),
@@ -299,8 +295,7 @@ void main() {
     selectionArea.onSelectionChanged!(null);
     await tester.pump();
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
 
     expect(
       tester
@@ -352,22 +347,26 @@ void main() {
     selectionArea.onSelectionChanged!(const SelectedContent(plainText: '江南'));
     await tester.pump();
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderTypographySettings(tester);
     await tester.ensureVisible(find.byKey(const Key('reader-flow-paged')));
     await tester.tap(find.byKey(const Key('reader-flow-paged')));
     await tester.pumpAndSettle();
     expect(controller.settings.flow, ReaderFlow.paged);
+    await dismissReaderTypographySettings(tester);
+    await openReaderMoreSheet(tester);
     expect(
       tester
           .widget<ListTile>(find.byKey(const Key('reader-selected-text-mark')))
           .enabled,
       isFalse,
     );
+    await openReaderTypographySettings(tester);
     await tester.ensureVisible(find.byKey(const Key('reader-flow-scrolling')));
     await tester.tap(find.byKey(const Key('reader-flow-scrolling')));
     await tester.pumpAndSettle();
     expect(controller.settings.flow, ReaderFlow.scrolling);
+    await dismissReaderTypographySettings(tester);
+    await openReaderMoreSheet(tester);
     await tester.ensureVisible(
       find.byKey(const Key('reader-selected-text-mark')),
     );
@@ -447,8 +446,7 @@ void main() {
       isTrue,
     );
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     expect(
       tester
           .widget<ListTile>(find.byKey(const Key('reader-selected-text-mark')))
@@ -510,8 +508,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('toc-chapter-1')));
     await tester.pumpAndSettle();
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
 
     expect(
       tester

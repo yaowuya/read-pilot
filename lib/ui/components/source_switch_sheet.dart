@@ -6,6 +6,7 @@ import '../../application/app_controller.dart';
 import '../../domain/book.dart';
 import '../../domain/change_source_settings.dart';
 import '../../domain/source_switch_candidate.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'book_cover.dart';
 import 'common.dart';
@@ -399,8 +400,8 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                   onPressed: _switchingId == null ? _openOptions : null,
                   icon: Icon(
                     _settings.checkAuthor || _settings.sortByWordCount
-                        ? Icons.tune
-                        : Icons.tune_outlined,
+                        ? DesignIcons.sliders
+                        : DesignIcons.sliders,
                     size: 20,
                     color: _settings.checkAuthor || _settings.sortByWordCount
                         ? AppColors.ink
@@ -431,7 +432,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.sort, size: 18),
+                      const Icon(DesignIcons.arrowUpDown, size: 18),
                       const SizedBox(width: 4),
                       Text(
                         _sortBySource ? '书源名称' : '相关度',
@@ -446,7 +447,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                   onPressed: !_loading && _switchingId == null
                       ? () => _reload(manual: true)
                       : null,
-                  icon: const Icon(Icons.refresh, size: 20),
+                  icon: const Icon(DesignIcons.refresh, size: 20),
                 ),
                 IconButton(
                   tooltip: '关闭',
@@ -454,7 +455,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                   onPressed: _switchingId == null
                       ? () => Navigator.pop(context)
                       : null,
-                  icon: const Icon(Icons.close, size: 20),
+                  icon: const Icon(DesignIcons.close, size: 20),
                 ),
               ],
             ),
@@ -475,7 +476,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                   horizontal: 12,
                   vertical: 7,
                 ),
-                prefixIcon: const Icon(Icons.search, size: 20),
+                prefixIcon: const Icon(DesignIcons.search, size: 20),
                 prefixIconConstraints: const BoxConstraints(
                   minWidth: 34,
                   minHeight: 0,
@@ -487,7 +488,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
                     : IconButton(
                         tooltip: '清除筛选',
                         onPressed: _clearFilter,
-                        icon: const Icon(Icons.close, size: 18),
+                        icon: const Icon(DesignIcons.close, size: 18),
                       ),
                 suffixIconConstraints: const BoxConstraints(
                   minWidth: 34,
@@ -753,7 +754,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Icon(
-                Icons.bookmark_added_outlined,
+                DesignIcons.bookmarkCheck,
                 size: 13,
                 color: Color(0xFF95A3B5),
               ),
@@ -802,7 +803,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
               onPressed: _switchingId == null
                   ? () => _reload(manual: true)
                   : null,
-              icon: const Icon(Icons.refresh, size: 18),
+              icon: const Icon(DesignIcons.refresh, size: 18),
               label: const Text('重试'),
             ),
           ],
@@ -866,7 +867,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
             child: Column(
               children: [
                 const Icon(
-                  Icons.search_off,
+                  DesignIcons.searchX,
                   size: 28,
                   color: Color(0xFFB4BFCD),
                 ),
@@ -1135,7 +1136,7 @@ class _SourceSwitchSheetState extends State<SourceSwitchSheet> {
       tooltip: '书源操作',
       enabled: _switchingId == null,
       padding: EdgeInsets.zero,
-      icon: const Icon(Icons.more_vert, size: 20, color: AppColors.muted),
+      icon: const Icon(DesignIcons.ellipsis, size: 20, color: AppColors.muted),
       onSelected: (action) => unawaited(_sourceAction(candidate, action)),
       itemBuilder: (_) => const [
         PopupMenuItem(value: CandidateSourceAction.top, child: Text('置顶书源')),

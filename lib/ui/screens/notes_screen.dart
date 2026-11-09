@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book.dart';
 import '../components/book_cover.dart';
 import '../components/common.dart';
 import '../components/design.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 
 /// 设计稿 `.note-card` 一组中性色，主题色板没有收录。
@@ -20,8 +22,7 @@ const _actionInk = Color(0xFF9EA9BA);
 /// 读书笔记：按设计稿把书签与想法排成一路发丝线分隔的引文卡。
 ///
 /// 搜索只过滤本机已有的笔记（书名、划线、想法三处任一命中），不发网络请求；
-/// 从阅读器进入时带 [bookId]，仅看这一本书。导出按钮保留设计稿的位置，本版本
-/// 没有导出能力，点击后如实提示，而不是假装导出了一份文件。
+/// 从阅读器进入时带 [bookId]，仅看这一本书。导出生成本机纯文本并复制到剪贴板。
 class NotesScreen extends StatefulWidget {
   const NotesScreen({
     super.key,
@@ -109,9 +110,32 @@ class _NotesScreenState extends State<NotesScreen> {
         actions: [
           CircleIconButton(
             key: const Key('notes-export'),
-            icon: Icons.ios_share,
+            icon: DesignIcons.share,
             tooltip: '导出笔记',
-            onPressed: () => showMessage(context, '导出功能将在后续版本提供。'),
+            onPressed: () async {
+              final notes = _notes;
+              if (notes.isEmpty) {
+                showMessage(context, '还没有可导出的笔记。');
+                return;
+              }
+              final buffer = StringBuffer('读书笔记\n\n');
+              for (final note in notes) {
+                final book = widget.controller.book(note.bookId);
+                buffer.writeln('《${book?.title ?? note.bookId}》');
+                buffer.writeln(_chapterLabel(note, book));
+                if (note.quote.trim().isNotEmpty) {
+                  buffer.writeln('> ${note.quote.trim()}');
+                }
+                if (note.note.trim().isNotEmpty) {
+                  buffer.writeln(note.note.trim());
+                }
+                buffer.writeln();
+              }
+              await Clipboard.setData(ClipboardData(text: buffer.toString()));
+              if (context.mounted) {
+                showMessage(context, '已复制 ${notes.length} 条笔记到剪贴板。');
+              }
+            },
           ),
         ],
       ),
@@ -138,7 +162,7 @@ class _NotesScreenState extends State<NotesScreen> {
               ),
               if (notes.isEmpty)
                 EmptyBlock(
-                  icon: Icons.edit_note,
+                  icon: DesignIcons.notebookPen,
                   title: _keyword.trim().isEmpty ? '写下第一条想法' : '没有找到相关笔记',
                   description: '阅读时，选中一句话\n就可以开始记录',
                 )
@@ -235,7 +259,7 @@ class _NotesScreenState extends State<NotesScreen> {
                           ),
                           const SizedBox(width: 2),
                           Icon(
-                            Icons.north_east,
+                            DesignIcons.arrowUpRight,
                             size: 15,
                             color: book == null ? _bottomInk : _actionInk,
                           ),
@@ -254,7 +278,7 @@ class _NotesScreenState extends State<NotesScreen> {
                 padding: const EdgeInsets.all(5),
                 constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.delete_outline),
+                icon: const Icon(DesignIcons.trash),
               ),
             ],
           ),

@@ -9,6 +9,7 @@ import '../../domain/search_merge.dart';
 import '../components/book_cover.dart';
 import '../components/common.dart';
 import '../components/design.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 
 /// 设计稿里搜索页用的一组中性灰，主题色板没有收录。
@@ -93,6 +94,11 @@ class _SearchScreenState extends State<SearchScreen> {
     final anchor = widget.source;
     if (anchor != null) _scopeSources.add(anchor.id);
     unawaited(_loadHistory());
+    if (widget.initialQuery.trim().isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_search());
+      });
+    }
   }
 
   @override
@@ -281,7 +287,7 @@ class _SearchScreenState extends State<SearchScreen> {
         actions: [
           CircleIconButton(
             key: const Key('search-scope'),
-            icon: Icons.tune,
+            icon: DesignIcons.sliders,
             tooltip: '选择搜索范围',
             onPressed: _showScope,
           ),
@@ -342,7 +348,7 @@ class _SearchScreenState extends State<SearchScreen> {
       visualDensity: VisualDensity.compact,
       iconSize: 16,
       color: AppColors.muted,
-      icon: const Icon(Icons.close),
+      icon: const Icon(DesignIcons.close),
     ),
   );
 
@@ -368,7 +374,7 @@ class _SearchScreenState extends State<SearchScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Icon(
-                      Icons.layers_outlined,
+                      DesignIcons.layers,
                       size: 15,
                       color: _scopeIconInk,
                     ),
@@ -383,7 +389,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     ),
                     const SizedBox(width: 6),
                     const Icon(
-                      Icons.keyboard_arrow_down,
+                      DesignIcons.chevronDown,
                       size: 12,
                       color: _scopeIconInk,
                     ),
@@ -413,7 +419,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: _exact
-                      ? const Icon(Icons.check, size: 11, color: Colors.white)
+                      ? const Icon(DesignIcons.check, size: 11, color: Colors.white)
                       : null,
                 ),
                 const SizedBox(width: 6),
@@ -623,7 +629,7 @@ class _SearchScreenState extends State<SearchScreen> {
       child: Column(
         children: [
           Icon(
-            _searching ? Icons.search : Icons.menu_book_outlined,
+            _searching ? DesignIcons.search : DesignIcons.bookOpen,
             size: 34,
             color: _emptyIconInk,
           ),
@@ -673,7 +679,7 @@ class _SearchScreenState extends State<SearchScreen> {
     child: Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: const [
-        Icon(Icons.info_outline, size: 12, color: _footInk),
+        Icon(DesignIcons.info, size: 12, color: _footInk),
         SizedBox(width: 5),
         Text(
           '搜索进度与来源数来自各书源',
@@ -738,7 +744,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 color: _idleIconFill,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.search, size: 22, color: _idleIconInk),
+              child: const Icon(DesignIcons.search, size: 22, color: _idleIconInk),
             ),
             const SizedBox(height: 18),
             const Text(
@@ -781,7 +787,7 @@ class _SearchScreenState extends State<SearchScreen> {
               padding: const EdgeInsets.symmetric(vertical: 14),
               child: Row(
                 children: [
-                  const Icon(Icons.history, size: 16, color: Color(0xFFB2BBC7)),
+                  const Icon(DesignIcons.rotateCcw, size: 16, color: Color(0xFFB2BBC7)),
                   const SizedBox(width: 13),
                   Expanded(
                     child: Text(
@@ -802,7 +808,7 @@ class _SearchScreenState extends State<SearchScreen> {
           onPressed: () => _deleteHistory(keyword),
           iconSize: 15,
           color: const Color(0xFFBAC1CB),
-          icon: const Icon(Icons.close),
+          icon: const Icon(DesignIcons.close),
         ),
       ],
     ),
@@ -899,7 +905,7 @@ class _SearchScreenState extends State<SearchScreen> {
                           tooltip: '取消范围选择',
                           onPressed: () => Navigator.of(sheetContext).pop(),
                           color: const Color(0xFF8F99A7),
-                          icon: const Icon(Icons.close, size: 20),
+                          icon: const Icon(DesignIcons.close, size: 20),
                         ),
                         const Expanded(
                           child: Text(
@@ -946,7 +952,7 @@ class _SearchScreenState extends State<SearchScreen> {
                             child: Row(
                               children: [
                                 const Icon(
-                                  Icons.search,
+                                  DesignIcons.search,
                                   size: 17,
                                   color: AppColors.muted,
                                 ),
@@ -1153,7 +1159,7 @@ class _ScopeOption extends StatelessWidget {
               borderRadius: BorderRadius.circular(6),
             ),
             child: selected
-                ? const Icon(Icons.check, size: 13, color: Colors.white)
+                ? const Icon(DesignIcons.check, size: 13, color: Colors.white)
                 : null,
           ),
         ],
@@ -1224,7 +1230,7 @@ class _ResultRow extends StatelessWidget {
                           border: Border.all(color: Colors.white, width: 2),
                         ),
                         child: const Icon(
-                          Icons.check,
+                          DesignIcons.check,
                           size: 10,
                           color: Colors.white,
                         ),
@@ -1405,7 +1411,7 @@ class _LocalRow extends StatelessWidget {
               ],
             ),
           ),
-          const Icon(Icons.chevron_right, size: 15, color: Color(0xFFB4BDC8)),
+          const Icon(DesignIcons.chevronRight, size: 15, color: Color(0xFFB4BDC8)),
         ],
       ),
     ),

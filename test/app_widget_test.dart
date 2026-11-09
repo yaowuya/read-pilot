@@ -185,12 +185,15 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('library search filters actual books', (tester) async {
+  testWidgets('library search opens the search screen from the shelf', (
+    tester,
+  ) async {
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const Key('shelf-search')), '人间');
+    await tester.tap(find.byKey(const Key('shelf-search-action')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('book-public-renjian')), findsOneWidget);
-    expect(find.byKey(const Key('book-public-fusheng')), findsNothing);
+    expect(find.text('搜索'), findsWidgets);
+    // Search screen owns filtering; the shelf itself no longer has an inline pill.
+    expect(find.byKey(const Key('shelf-search')), findsNothing);
   });
 }

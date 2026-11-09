@@ -1,6 +1,12 @@
 import '../../domain/source_rule_support.dart';
 
-/// Applies one bounded `pattern##replacement` rule to complete chapter text.
+/// Applies one bounded whole-chapter cleanup rule to complete chapter text.
+///
+/// Accepted forms (Legado-observable):
+/// - `pattern##replacement` — replace matches
+/// - `pattern##` — delete matches
+/// - `##pattern` — delete matches (empty selector + pattern)
+/// - `##pattern##replacement` — replace matches
 final class ContentReplacement {
   const ContentReplacement();
 
@@ -13,7 +19,9 @@ final class ContentReplacement {
 
   /// Returns a complete result or throws; never publishes truncated output.
   String apply(String input, String rule) {
-    if (!isSupported(rule)) {
+    final parsed = SourceRuleSupport.parseContentReplacement(rule);
+    if (parsed == null ||
+        !SourceRuleSupport.isSafeRegex(parsed.pattern, parsed.replacement)) {
       throw const FormatException('replaceRegex 必须使用安全的“正则##替换文本”格式。');
     }
     if (input.length > maxInputCharacters) {
@@ -22,9 +30,8 @@ final class ContentReplacement {
       );
     }
 
-    final separator = rule.indexOf('##');
-    final expression = RegExp(rule.substring(0, separator));
-    final replacement = rule.substring(separator + 2);
+    final expression = RegExp(parsed.pattern);
+    final replacement = parsed.replacement;
     final output = StringBuffer();
     var cursor = 0;
     var count = 0;

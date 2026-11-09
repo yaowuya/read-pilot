@@ -10,6 +10,7 @@ import '../components/book_cover.dart';
 import '../components/common.dart';
 import '../components/design.dart';
 import '../components/explore_kind_row.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'search_screen.dart';
 
@@ -376,6 +377,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                     label: const Text('全部分组'),
                     selected: _group == null,
                     showCheckmark: false,
+                    backgroundColor: Colors.transparent,
                     selectedColor: AppColors.softBlue,
                     side: BorderSide.none,
                     onSelected: (_) => setState(() => _group = null),
@@ -389,6 +391,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                       label: Text(group),
                       selected: _group == group,
                       showCheckmark: false,
+                      backgroundColor: Colors.transparent,
                       selectedColor: AppColors.softBlue,
                       side: BorderSide.none,
                       onSelected: (_) => setState(() => _group = group),
@@ -407,14 +410,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   description: '换一个分组，或者把书源分到这个分组里。',
                 )
         else ...[
-          DecoratedBox(
-            decoration: const BoxDecoration(
-              border: Border(
-                top: BorderSide(color: AppColors.line),
-                bottom: BorderSide(color: AppColors.line),
-              ),
-            ),
-            child: Column(
+          Column(
               children: [
                 for (final source in sources)
                   _DiscoverSourceRow(
@@ -426,7 +422,6 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   ),
               ],
             ),
-          ),
           const SizedBox(height: 4),
           TextButton(
             key: const Key('discover-add-source'),
@@ -439,7 +434,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             child: const Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.add, size: 16),
+                Icon(DesignIcons.plus, size: 16),
                 SizedBox(width: 7),
                 Text('添加书源'),
               ],
@@ -455,7 +450,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         const Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.info_outline, size: 12, color: _footInk),
+            Icon(DesignIcons.info, size: 12, color: _footInk),
             SizedBox(width: 5),
             Text(
               '书源与分类都由你自己维护',
@@ -475,7 +470,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           padding: const EdgeInsets.only(right: 8),
           child: CircleIconButton(
             key: const Key('discover-back'),
-            icon: Icons.chevron_left,
+            icon: DesignIcons.chevronLeft,
             tooltip: '返回书架',
             onPressed: widget.onBack!,
           ),
@@ -486,7 +481,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           trailing: [
             CircleIconButton(
               key: const Key('discover-sources'),
-              icon: Icons.tune,
+              icon: DesignIcons.sliders,
               tooltip: '管理发现来源',
               onPressed: widget.onSources,
             ),
@@ -572,7 +567,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       const SizedBox(width: 6),
       CircleIconButton(
         key: const Key('discover-mode'),
-        icon: Icons.view_carousel_outlined,
+        icon: DesignIcons.libraryBig,
         tooltip: '切换到分类浏览',
         size: 32,
         onPressed: () => unawaited(_setMode(ExploreMode.content)),
@@ -591,7 +586,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   }
 
   Widget _buildNoSourceEmpty() => EmptyBlock(
-    icon: Icons.library_books_outlined,
+    icon: DesignIcons.libraryBig,
     title: '添加书源，发现更多书',
     description: '书源决定能找到哪些书。\n添加后，就可以按书名和作者搜索。',
     primaryLabel: '添加书源',
@@ -619,7 +614,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             children: [
               CircleIconButton(
                 key: const Key('discover-detail-back'),
-                icon: Icons.chevron_left,
+                icon: DesignIcons.chevronLeft,
                 tooltip: '返回发现',
                 onPressed: () => setState(() => _detailSourceId = null),
               ),
@@ -639,7 +634,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               ),
               CircleIconButton(
                 key: const Key('discover-detail-search'),
-                icon: Icons.search,
+                icon: DesignIcons.search,
                 tooltip: '搜索此书源',
                 onPressed: () => unawaited(
                   _openSearch(
@@ -775,7 +770,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               const SizedBox(width: 8),
               CircleIconButton(
                 key: const Key('discover-mode'),
-                icon: Icons.view_day_outlined,
+                icon: DesignIcons.list,
                 tooltip: '切换到书源列表',
                 size: 32,
                 onPressed: () => unawaited(_setMode(ExploreMode.browse)),
@@ -885,7 +880,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           children: [
             CircleIconButton(
               key: const Key('discover-page-back'),
-              icon: Icons.chevron_left,
+              icon: DesignIcons.chevronLeft,
               tooltip: '返回发现',
               onPressed: () => unawaited(_closePage()),
             ),
@@ -1031,7 +1026,7 @@ class _DiscoverSourceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-    color: Colors.white,
+    color: Colors.transparent,
     child: InkWell(
       onTap: onTap,
       child: Container(
@@ -1049,7 +1044,7 @@ class _DiscoverSourceRow extends StatelessWidget {
                 borderRadius: BorderRadius.circular(11),
               ),
               child: Icon(
-                browseable ? Icons.library_books_outlined : Icons.search,
+                browseable ? DesignIcons.libraryBig : DesignIcons.search,
                 size: 20,
                 color: browseable ? AppColors.blue : _searchOnlyInk,
               ),
@@ -1089,7 +1084,7 @@ class _DiscoverSourceRow extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             Icon(
-              browseable ? Icons.chevron_right : Icons.search,
+              browseable ? DesignIcons.chevronRight : DesignIcons.search,
               size: 15,
               color: _rowChevron,
             ),

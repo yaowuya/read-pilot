@@ -58,4 +58,19 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('accepts ##pattern delete form', () {
+    expect(ContentReplacement.isSupported(r'##广告词'), isTrue);
+    expect(
+      const ContentReplacement().apply('第12章\n广告词\n正文', r'##广告词'),
+      '第12章\n\n正文',
+    );
+  });
+
+  test('accepts ##pattern##replacement form', () {
+    expect(
+      const ContentReplacement().apply('第12章广告', r'##广告##'),
+      '第12章',
+    );
+  });
 }

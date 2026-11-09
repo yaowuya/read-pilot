@@ -1364,6 +1364,22 @@ class AppController extends ChangeNotifier {
     return updated;
   }
 
+  final Set<String> _coverFetches = {};
+
+  /// Asks the current source for a cover when the shelf only has a placeholder.
+  ///
+  /// One attempt per book per session. A source that does not provide a cover
+  /// leaves the flat placeholder in place.
+  Future<void> ensureBookCover(Book value) async {
+    if (!value.isRemote || value.coverUrl != null) return;
+    if (!_coverFetches.add(value.id)) return;
+    try {
+      await refreshBookCover(value.id);
+    } catch (_) {
+      // The source may not publish a cover. The flat placeholder stays.
+    }
+  }
+
   /// Loads source-scoped cover bytes without persisting changes.
   /// Returns null when source/cover is absent; source and download failures propagate.
   Future<Uint8List?> loadBookCover(Book value) async {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'book_cover.dart';
 import 'book_text_rule_sheet.dart';
@@ -195,7 +196,7 @@ class _BookDetailsState extends State<BookDetails> {
             ),
           ),
       ],
-      child: const _CircleToolButton(icon: Icons.more_horiz, tooltip: '更多操作'),
+      child: const _CircleToolButton(icon: DesignIcons.ellipsis, tooltip: '更多操作'),
     );
   }
 
@@ -208,11 +209,11 @@ class _BookDetailsState extends State<BookDetails> {
   };
 
   IconData _actionIcon(_DetailAction action) => switch (action) {
-    _DetailAction.switchSource => Icons.swap_horiz,
-    _DetailAction.refreshCover => Icons.image_search_outlined,
-    _DetailAction.cache => Icons.download_for_offline_outlined,
-    _DetailAction.manageCache => Icons.delete_sweep_outlined,
-    _DetailAction.textRules => Icons.text_fields,
+    _DetailAction.switchSource => DesignIcons.refresh,
+    _DetailAction.refreshCover => DesignIcons.scanSearch,
+    _DetailAction.cache => DesignIcons.download,
+    _DetailAction.manageCache => DesignIcons.hardDrive,
+    _DetailAction.textRules => DesignIcons.eraser,
   };
 
   String _actionLabel(_DetailAction action) => switch (action) {
@@ -274,8 +275,8 @@ class _BookDetailsState extends State<BookDetails> {
                 PillTag(
                   book.sourceLabel,
                   icon: book.isRemote
-                      ? Icons.public
-                      : Icons.description_outlined,
+                      ? DesignIcons.globe
+                      : DesignIcons.fileText,
                 ),
               ],
             ),
@@ -349,7 +350,7 @@ class _BookDetailsState extends State<BookDetails> {
             children: [
               Text(_introExpanded ? '收起' : '展开简介'),
               Icon(
-                _introExpanded ? Icons.expand_less : Icons.expand_more,
+                _introExpanded ? DesignIcons.chevronUp : DesignIcons.chevronDown,
                 size: 15,
               ),
             ],
@@ -367,7 +368,7 @@ class _BookDetailsState extends State<BookDetails> {
       children: [
         ListRow(
           key: const Key('book-toc-row'),
-          icon: Icons.list_alt,
+          icon: DesignIcons.list,
           title: '目录',
           subtitle: book.chapters.isEmpty
               ? '加入书架后加载'
@@ -375,7 +376,7 @@ class _BookDetailsState extends State<BookDetails> {
         ),
         ListRow(
           key: const Key('book-notes-row'),
-          icon: Icons.edit_note,
+          icon: DesignIcons.notebookPen,
           title: '我的笔记',
           subtitle: '$notes 条想法与划线',
           onTap: widget.onOpenNotes,
@@ -402,7 +403,7 @@ class _BookDetailsState extends State<BookDetails> {
             child: Row(
               children: [
                 const Icon(
-                  Icons.auto_awesome,
+                  DesignIcons.sparkles,
                   size: 20,
                   color: Color(0xFF6A93CC),
                 ),
@@ -432,7 +433,7 @@ class _BookDetailsState extends State<BookDetails> {
                   ),
                 ),
                 const Icon(
-                  Icons.chevron_right,
+                  DesignIcons.chevronRight,
                   size: 17,
                   color: Color(0xFFB0BECE),
                 ),
@@ -480,7 +481,7 @@ class _BookDetailsState extends State<BookDetails> {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.info_outline, size: 13, color: Color(0xFFA7ADB7)),
+        const Icon(DesignIcons.info, size: 13, color: Color(0xFFA7ADB7)),
         const SizedBox(width: 5),
         Expanded(
           child: Text(
@@ -512,7 +513,7 @@ class _BookDetailsState extends State<BookDetails> {
               onPressed: _busyAction == null && shelfBook == null
                   ? () => _addToShelf(book)
                   : null,
-              icon: Icon(shelfBook == null ? Icons.add : Icons.check, size: 17),
+              icon: Icon(shelfBook == null ? DesignIcons.plus : DesignIcons.check, size: 17),
               label: Text(shelfBook == null ? '加入书架' : '已在书架'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF54749D),
@@ -539,7 +540,7 @@ class _BookDetailsState extends State<BookDetails> {
                       dimension: 16,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(Icons.menu_book_outlined, size: 18),
+                  : const Icon(DesignIcons.bookOpen, size: 18),
               label: Text(
                 _busyAction == 'read'
                     ? '正在加载目录…'

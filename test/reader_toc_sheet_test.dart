@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:read_pilot/domain/book.dart';
 import 'package:read_pilot/ui/components/reader_toc_sheet.dart';
+import 'package:read_pilot/ui/design_icons.dart';
 
 Book _book() => Book(
   id: 'toc-fixture',
@@ -41,10 +42,38 @@ Future<void> _open(
   ),
 );
 
-List<String?> _titles(WidgetTester tester) => tester
-    .widgetList<ListTile>(find.byType(ListTile))
-    .map((tile) => (tile.title! as Text).data)
-    .toList();
+List<String?> _titles(WidgetTester tester) {
+  final indices = <int>[];
+  for (var i = 0; i < 32; i++) {
+    if (find.byKey(ValueKey('toc-chapter-$i')).evaluate().isNotEmpty) {
+      indices.add(i);
+    }
+  }
+  indices.sort();
+  return [
+    for (final index in indices)
+      tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(ValueKey('toc-chapter-$index')),
+              matching: find.byWidgetPredicate(
+                (widget) => widget is Text && widget.style?.fontSize == 14,
+              ),
+            ),
+          )
+          .data,
+  ];
+}
+
+void _expectCurrentChapter(WidgetTester tester, int index) {
+  expect(
+    find.descendant(
+      of: find.byKey(ValueKey('toc-chapter-$index')),
+      matching: find.byIcon(DesignIcons.audioLines),
+    ),
+    findsOneWidget,
+  );
+}
 
 void main() {
   testWidgets('descending display preserves original indices and markers', (
@@ -59,13 +88,8 @@ void main() {
       onChapterSelected: (index) => selected = index,
     );
     expect(_titles(tester), ['第三章', '第二章', '第一章']);
-    expect(
-      tester
-          .widget<ListTile>(find.byKey(const ValueKey('toc-chapter-1')))
-          .selected,
-      isTrue,
-    );
-    expect(find.byIcon(Icons.offline_pin_outlined), findsNWidgets(2));
+    _expectCurrentChapter(tester, 1);
+    expect(find.byIcon(DesignIcons.circleCheck), findsNWidgets(2));
     await tester.tap(find.byKey(const ValueKey('toc-chapter-2')));
     expect(selected, 2);
     expect(book.chapters.map((chapter) => chapter.id), [

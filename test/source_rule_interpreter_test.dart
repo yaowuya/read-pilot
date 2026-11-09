@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:html/parser.dart' as html;
 import 'package:read_pilot/services/source_runtime/rule_interpreter.dart';
+import 'package:read_pilot/services/source_runtime/rule_session.dart';
 import 'package:read_pilot/services/source_runtime/rule_tokenizer.dart';
 import 'package:read_pilot/services/source_runtime/script_runtime.dart';
 
@@ -51,7 +52,7 @@ void main() {
             </main>
           ''').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     final books = interpreter.select(root, '@CSS:.book');
 
@@ -75,7 +76,7 @@ void main() {
           .parse('<div><p class="a">一</p><p class="a">二</p></div>')
           .documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     expect(
       () => interpreter.select(root, '@CSS:p:nth-of-type(2)'),
@@ -94,7 +95,7 @@ void main() {
     final root = RuleNode.html(
       html.parse('<div><h1 class="title">月下读书</h1></div>').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     expect(
       interpreter.extract(root, '@CSS:.missing@text||@CSS:.title@text'),
@@ -115,7 +116,7 @@ void main() {
         </section>
       ''').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     expect(interpreter.select(root, 'id.catalog@tag.div'), hasLength(2));
     expect(interpreter.extract(root, 'class.book@tag.a@text'), '第一本\n第二本');
@@ -129,7 +130,7 @@ void main() {
         <nav><a href="/chapter/2">下一页</a></nav>
       ''').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
     final chapter = interpreter.select(root, '@CSS:#list a').single;
 
     expect(interpreter.extract(chapter, 'text'), '第一章');
@@ -151,7 +152,7 @@ void main() {
         </main>
       ''').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     final books = interpreter.select(
       root,
@@ -203,7 +204,7 @@ void main() {
         }
       '''),
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     final books = interpreter.select(root, r'@Json:$.books[*]');
 
@@ -225,7 +226,7 @@ void main() {
         }
       '''),
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     expect(
       interpreter.extract(root, r'@Json:$.books[?@.score >= 8].name'),
@@ -240,7 +241,7 @@ void main() {
         html.parse('<article id="content">正文广告</article>').documentElement!,
       );
       final runtime = _RecordingScriptRuntime()..result = '正文';
-      const interpreter = RuleInterpreter();
+      final interpreter = RuleInterpreter();
 
       final value = await interpreter.extractWithScripts(
         root,
@@ -258,30 +259,32 @@ void main() {
     final root = RuleNode.html(
       html.parse('<h1 class="title">月   下 阅读</h1>').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     expect(interpreter.extract(root, r'@CSS:.title@text##\s+## '), '月 下 阅读');
+    // Unsafe / empty cleanup rules keep the CSS extraction instead of failing.
     expect(
-      () => interpreter.extract(root, r'@CSS:.title@text##(a+)+$##'),
-      throwsFormatException,
+      interpreter.extract(root, r'@CSS:.title@text##(a+)+$##'),
+      '月   下 阅读',
     );
+    expect(interpreter.extract(root, r'@CSS:.title@text##x?##y'), '月   下 阅读');
     expect(
-      () => interpreter.extract(root, r'@CSS:.title@text##x?##y'),
-      throwsFormatException,
-    );
-    expect(
-      () => interpreter.extract(root, '@CSS:.title@text##月##${'y' * 4097}'),
-      throwsFormatException,
+      interpreter.extract(root, '@CSS:.title@text##月##${'y' * 4097}'),
+      '月   下 阅读',
     );
     final ambiguous =
         '^${List.filled(80, 'a?').join()}'
         '${List.filled(80, 'a').join()}b\$';
     expect(
-      () => interpreter.extract(
+      interpreter.extract(
         RuleNode.html(html.parse('<h1>${'a' * 80}</h1>').documentElement!),
         '@CSS:h1@text##$ambiguous##x',
       ),
-      throwsFormatException,
+      'a' * 80,
+    );
+    expect(
+      interpreter.extract(root, r'@CSS:.title@text##'),
+      '月   下 阅读',
     );
   });
 
@@ -295,7 +298,7 @@ void main() {
         <div class="book"><a href="/2">第二本</a></div>
       ''').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     // `span.0` 是 Legado 的下标写法：先选中全部 span，再取第 0 个。
     expect(interpreter.extract(root, '@CSS:.options span.0@text'), '一');
@@ -318,7 +321,7 @@ void main() {
     final root = RuleNode.html(
       html.parse('<div class="title"><h1>月下读书</h1></div>').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     // 无法解析的选择器不应把英文解析错误抛给阅读界面。
     expect(interpreter.extract(root, '@CSS:span.0.@text'), isEmpty);
@@ -343,12 +346,137 @@ void main() {
         </ul>
       ''').documentElement!,
     );
-    const interpreter = RuleInterpreter();
+    final interpreter = RuleInterpreter();
 
     expect(interpreter.extract(root, '@CSS:.a@text'), '一\n二');
     expect(interpreter.extract(root, '@CSS:.a.1@text'), '二');
     expect(interpreter.extract(root, '@CSS:.a, .b@text'), '一\n二\n三\n四');
     // 逗号两侧分别按下标取，再按文档顺序合并。
     expect(interpreter.extract(root, '@CSS:.a.0, .b.1@text'), '一\n四');
+  });
+
+  test('&& concatenates select and extract branches', () {
+    final root = RuleNode.html(
+      html.parse('''
+        <main>
+          <a class="title" href="/t">书名</a>
+          <span class="author">作者甲</span>
+        </main>
+      ''').documentElement!,
+    );
+    final interpreter = RuleInterpreter();
+
+    final nodes = interpreter.select(root, '@CSS:.title&&@CSS:.author');
+    expect(nodes, hasLength(2));
+    expect(
+      interpreter.extract(root, '@CSS:.title@text&&@CSS:.author@text'),
+      '书名\n作者甲',
+    );
+    expect(
+      interpreter.extract(root, '@CSS:.missing@text&&@CSS:.author@text'),
+      '作者甲',
+    );
+  });
+
+  test('%% interleaves branch results by index', () {
+    final root = RuleNode.html(
+      html.parse('''
+        <ul>
+          <li class="a">A1</li><li class="a">A2</li>
+          <li class="b">B1</li><li class="b">B2</li><li class="b">B3</li>
+        </ul>
+      ''').documentElement!,
+    );
+    final interpreter = RuleInterpreter();
+
+    final nodes = interpreter.select(root, '@CSS:.a%%@CSS:.b');
+    expect(nodes, hasLength(4));
+    expect(
+      [for (final n in nodes) interpreter.extract(n, 'text')],
+      ['A1', 'B1', 'A2', 'B2'],
+    );
+    expect(
+      interpreter.extract(root, '@CSS:.a@text%%@CSS:.b@text'),
+      'A1\nB1\nA2\nB2',
+    );
+  });
+
+  test('first top-level || still short-circuits before later combines', () {
+    final root = RuleNode.html(
+      html
+          .parse('<div><h1 class="title">月下</h1><p class="sub">副标题</p></div>')
+          .documentElement!,
+    );
+    final interpreter = RuleInterpreter();
+
+    expect(
+      interpreter.extract(
+        root,
+        '@CSS:.title@text||@CSS:.sub@text&&@CSS:.missing@text',
+      ),
+      '月下',
+    );
+    expect(
+      interpreter.extract(
+        root,
+        '@CSS:.missing@text||@CSS:.title@text&&@CSS:.sub@text',
+      ),
+      '月下\n副标题',
+    );
+  });
+
+  test('put stores extracted values for later get in the same session', () {
+    final root = RuleNode.html(
+      html.parse('''
+        <div>
+          <span class="author">李白</span>
+          <h1 class="title">静夜思</h1>
+        </div>
+      ''').documentElement!,
+    );
+    final interpreter = RuleInterpreter();
+
+    expect(
+      interpreter.extract(
+        root,
+        '@put:{"author":"@CSS:.author@text"}@CSS:.title@text',
+      ),
+      '静夜思',
+    );
+    expect(interpreter.session.get('author'), '李白');
+    expect(
+      interpreter.extract(
+        root,
+        '@put:{"label":"夜"}@CSS:.title@text##@get:{label}##*',
+      ),
+      '静*思',
+    );
+  });
+
+  test('put rejects oversized keys and session entry caps', () {
+    final root = RuleNode.html(
+      html.parse('<div class="t">值</div>').documentElement!,
+    );
+    final interpreter = RuleInterpreter(session: RuleSession(maxEntries: 1));
+    final hugeKey = 'k' * 65;
+
+    expect(
+      () => interpreter.extract(
+        root,
+        '@put:{"' + hugeKey + '":"x"}@CSS:.t@text',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      interpreter.extract(root, '@put:{"a":"@CSS:.t@text"}@CSS:.t@text'),
+      '值',
+    );
+    expect(
+      () => interpreter.extract(
+        root,
+        '@put:{"b":"@CSS:.t@text"}@CSS:.t@text',
+      ),
+      throwsFormatException,
+    );
   });
 }

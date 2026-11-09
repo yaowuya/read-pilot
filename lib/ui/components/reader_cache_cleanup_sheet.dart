@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'common.dart';
 
@@ -176,7 +177,7 @@ class _ReaderCacheCleanupSheetState extends State<ReaderCacheCleanupSheet> {
                         key: const Key('cache-clear-close'),
                         tooltip: '关闭',
                         onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
+                        icon: const Icon(DesignIcons.close),
                       ),
                     ],
                   ),

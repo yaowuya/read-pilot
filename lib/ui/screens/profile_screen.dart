@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
 import '../components/design.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 
 /// 我的：头像与签名、读书统计、以及按稿分组的功能入口。
@@ -28,12 +29,33 @@ class ProfileScreen extends StatelessWidget {
   final VoidCallback onBackup;
   final VoidCallback onSettings;
 
+  /// 与阅读记录页同一口径：相邻足迹间隔累加，单段最多半小时。
+  Duration _totalReadingDuration() {
+    const sessionCap = Duration(minutes: 30);
+    final activities = [...controller.readingActivities]
+      ..sort((a, b) => a.occurredAt.compareTo(b.occurredAt));
+    var total = Duration.zero;
+    for (var i = 1; i < activities.length; i++) {
+      final gap = activities[i].occurredAt.difference(
+        activities[i - 1].occurredAt,
+      );
+      if (gap > Duration.zero && gap <= sessionCap) total += gap;
+    }
+    return total;
+  }
+
   @override
   Widget build(BuildContext context) {
     final books = controller.books;
-    final reading = books.where((book) => book.hasStarted).length;
     final finished = books.where((book) => book.finished).length;
-    final notes = controller.bookmarks.length;
+    final markNotes = books.fold<int>(
+      0,
+      (sum, book) => sum + controller.readerMarks(book.id).length,
+    );
+    final notes = markNotes > 0 ? markNotes : controller.bookmarks.length;
+    final duration = _totalReadingDuration();
+    final hours = duration.inMinutes ~/ 60;
+    final minutes = duration.inMinutes % 60;
     final enabledSources = controller.sources
         .where((source) => source.enabled)
         .length;
@@ -51,23 +73,29 @@ class ProfileScreen extends StatelessWidget {
           children: [
             _header(context),
             const SizedBox(height: 20),
-            _statsCard(
-              context,
-              reading: reading,
-              finished: finished,
-              notes: notes,
+            InkWell(
+              key: const Key('profile-stats'),
+              onTap: onHistory,
+              borderRadius: BorderRadius.circular(AppRadii.card),
+              child: _statsCard(
+                context,
+                hours: hours,
+                minutes: minutes,
+                finished: finished,
+                notes: notes,
+              ),
             ),
             const SizedBox(height: 26),
             RowCard(
               children: [
                 ListRow(
-                  icon: Icons.bookmarks_outlined,
+                  icon: DesignIcons.notebookPen,
                   title: '读书笔记',
                   trailingText: notes == 0 ? '暂无' : '$notes 条',
                   onTap: onNotes,
                 ),
                 ListRow(
-                  icon: Icons.history_outlined,
+                  icon: DesignIcons.chart,
                   title: '阅读记录',
                   trailingText: controller.readingActivities.isEmpty
                       ? '暂无'
@@ -80,19 +108,19 @@ class ProfileScreen extends StatelessWidget {
             RowCard(
               children: [
                 ListRow(
-                  icon: Icons.file_download_outlined,
+                  icon: DesignIcons.fileUp,
                   title: '导入书籍',
                   trailingText: 'TXT · EPUB',
                   onTap: onImport,
                 ),
                 ListRow(
-                  icon: Icons.language_outlined,
+                  icon: DesignIcons.layers,
                   title: '书源管理',
                   trailingText: '$enabledSources 个已启用',
                   onTap: onSources,
                 ),
                 ListRow(
-                  icon: Icons.cloud_upload_outlined,
+                  icon: DesignIcons.cloud,
                   title: '备份与同步',
                   trailingText: '本机保存',
                   onTap: onBackup,
@@ -103,7 +131,7 @@ class ProfileScreen extends StatelessWidget {
             RowCard(
               children: [
                 ListRow(
-                  icon: Icons.tune,
+                  icon: DesignIcons.settings,
                   title: '通用设置',
                   subtitle: '阅读排版、正文净化与下载偏好',
                   onTap: onSettings,
@@ -166,7 +194,7 @@ class ProfileScreen extends StatelessWidget {
           key: const Key('profile-settings'),
           tooltip: '设置',
           onPressed: onSettings,
-          icon: const Icon(Icons.settings_outlined, size: 21),
+          icon: const Icon(DesignIcons.settings, size: 21),
           color: AppColors.muted,
         ),
       ],
@@ -175,7 +203,8 @@ class ProfileScreen extends StatelessWidget {
 
   Widget _statsCard(
     BuildContext context, {
-    required int reading,
+    required int hours,
+    required int minutes,
     required int finished,
     required int notes,
   }) => Container(
@@ -187,21 +216,72 @@ class ProfileScreen extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          '与书相伴的日子',
-          style: TextStyle(
-            fontSize: 10,
-            letterSpacing: 1,
-            color: Color(0xFF929BA7),
-          ),
+        const Row(
+          children: [
+            Expanded(
+              child: Text(
+                '与书相伴的日子',
+                style: TextStyle(
+                  fontSize: 10,
+                  letterSpacing: 1,
+                  color: Color(0xFF929BA7),
+                ),
+              ),
+            ),
+            Icon(DesignIcons.chevronRight, size: 18, color: Color(0xFFB0B7C1)),
+          ],
         ),
         const SizedBox(height: 16),
         Row(
           children: [
-            _stat('$reading', '本', '累计阅读'),
+            _durationStat(hours, minutes),
             _stat('$finished', '本', '读完的书'),
             _stat('$notes', '条', '读书笔记'),
           ],
+        ),
+      ],
+    ),
+  );
+
+  Widget _durationStat(int hours, int minutes) => Expanded(
+    child: Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Text(
+              '$hours',
+              style: const TextStyle(
+                fontSize: 23,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF3B4656),
+              ),
+            ),
+            const Text(
+              '时',
+              style: TextStyle(fontSize: 11, color: Color(0xFF9FA7B2)),
+            ),
+            const SizedBox(width: 2),
+            Text(
+              '$minutes',
+              style: const TextStyle(
+                fontSize: 23,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF3B4656),
+              ),
+            ),
+            const Text(
+              '分',
+              style: TextStyle(fontSize: 11, color: Color(0xFF9FA7B2)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          '累计阅读',
+          style: TextStyle(fontSize: 10, color: Color(0xFF9DA5B1)),
         ),
       ],
     ),

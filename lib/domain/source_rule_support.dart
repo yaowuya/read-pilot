@@ -206,13 +206,47 @@ class SourceRuleSupport {
     return repetitions <= _maxRepetitions;
   }
 
-  /// Accepts one whole-chapter `pattern##replacement` under the regex limits.
-  static bool isSafeContentReplacement(String rule) {
+  /// Parses whole-chapter cleanup forms used by `ruleContent.replaceRegex`.
+  ///
+  /// Supported:
+  /// - `pattern##replacement` / `pattern##` (delete)
+  /// - `##pattern` / `##pattern##replacement` (Legado delete / replace)
+  ///
+  /// A bare trailing `##` with no pattern (as on content selectors) returns
+  /// null so callers can skip cleanup without failing the chapter.
+  static ({String pattern, String replacement})? parseContentReplacement(
+    String rule,
+  ) {
     final separator = rule.indexOf('##');
-    if (separator <= 0) return false;
+    if (separator < 0) return null;
+    if (separator == 0) {
+      final rest = rule.substring(2);
+      if (rest.isEmpty) return null;
+      final second = rest.indexOf('##');
+      if (second < 0) {
+        return rest.trim().isEmpty
+            ? null
+            : (pattern: rest, replacement: '');
+      }
+      final pattern = rest.substring(0, second);
+      if (pattern.trim().isEmpty) return null;
+      return (
+        pattern: pattern,
+        replacement: rest.substring(second + 2),
+      );
+    }
     final pattern = rule.substring(0, separator);
-    return pattern.trim().isNotEmpty &&
-        isSafeRegex(pattern, rule.substring(separator + 2));
+    if (pattern.trim().isEmpty) return null;
+    return (
+      pattern: pattern,
+      replacement: rule.substring(separator + 2),
+    );
+  }
+
+  /// Accepts one whole-chapter cleanup rule under the regex limits.
+  static bool isSafeContentReplacement(String rule) {
+    final parsed = parseContentReplacement(rule);
+    return parsed != null && isSafeRegex(parsed.pattern, parsed.replacement);
   }
 
   static bool isSafeRegexRule(String rule) {

@@ -9,6 +9,7 @@ import 'package:read_pilot/domain/book_source.dart';
 import 'package:read_pilot/domain/source_switch_candidate.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/components/source_switch_sheet.dart';
+import 'package:read_pilot/ui/design_icons.dart';
 import 'package:read_pilot/ui/theme.dart';
 import 'package:sembast/sembast_memory.dart';
 
@@ -938,13 +939,13 @@ void main() {
       );
       expect(
         tester
-            .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.refresh))
+            .widget<IconButton>(find.widgetWithIcon(IconButton, DesignIcons.refresh))
             .onPressed,
         isNull,
       );
       expect(
         tester
-            .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.close))
+            .widget<IconButton>(find.widgetWithIcon(IconButton, DesignIcons.close))
             .onPressed,
         isNull,
       );

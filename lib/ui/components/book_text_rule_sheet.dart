@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../application/app_controller.dart';
 import '../../domain/book.dart';
 import '../../services/book_text_rules.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'common.dart';
 
@@ -190,7 +191,7 @@ class _BookTextRuleSheetState extends State<BookTextRuleSheet> {
                         key: const Key('text-rule-close'),
                         tooltip: '关闭',
                         onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
+                        icon: const Icon(DesignIcons.close),
                       ),
                     ],
                   ),
@@ -266,7 +267,7 @@ class _BookTextRuleSheetState extends State<BookTextRuleSheet> {
                                           ),
                                         ),
                                   icon: const Icon(
-                                    Icons.arrow_upward,
+                                    DesignIcons.arrowUp,
                                     size: 18,
                                   ),
                                 ),
@@ -286,7 +287,7 @@ class _BookTextRuleSheetState extends State<BookTextRuleSheet> {
                                           ),
                                         ),
                                   icon: const Icon(
-                                    Icons.arrow_downward,
+                                    DesignIcons.arrowDown,
                                     size: 18,
                                   ),
                                 ),
@@ -297,7 +298,7 @@ class _BookTextRuleSheetState extends State<BookTextRuleSheet> {
                                       ? null
                                       : () => _edit(rules[index]),
                                   icon: const Icon(
-                                    Icons.edit_outlined,
+                                    DesignIcons.type,
                                     size: 18,
                                   ),
                                 ),
@@ -310,7 +311,7 @@ class _BookTextRuleSheetState extends State<BookTextRuleSheet> {
                                       ? null
                                       : () => _delete(rules[index]),
                                   icon: const Icon(
-                                    Icons.delete_outline,
+                                    DesignIcons.trash,
                                     size: 18,
                                   ),
                                 ),
@@ -330,7 +331,7 @@ class _BookTextRuleSheetState extends State<BookTextRuleSheet> {
                             rules.length >= BookTextRules.maxRulesPerBook
                         ? null
                         : () => _edit(),
-                    icon: const Icon(Icons.add, size: 18),
+                    icon: const Icon(DesignIcons.plus, size: 18),
                     label: const Text('新增规则'),
                   ),
                   const SizedBox(height: 20),

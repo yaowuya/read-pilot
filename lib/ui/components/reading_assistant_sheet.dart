@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../domain/book.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 
 /// 阅读助手：按设计稿是一个从底部弹出的回顾面板。
@@ -202,7 +203,7 @@ class _ReadingAssistantSheetState extends State<ReadingAssistantSheet> {
           borderRadius: BorderRadius.circular(10),
         ),
         child: const Icon(
-          Icons.auto_awesome,
+          DesignIcons.sparkles,
           size: 18,
           color: Color(0xFF5789CB),
         ),
@@ -230,7 +231,7 @@ class _ReadingAssistantSheetState extends State<ReadingAssistantSheet> {
         iconSize: 18,
         color: const Color(0xFF8E96A3),
         onPressed: () => Navigator.of(context).maybePop(),
-        icon: const Icon(Icons.close),
+        icon: const Icon(DesignIcons.close),
       ),
     ],
   );
@@ -244,7 +245,7 @@ class _ReadingAssistantSheetState extends State<ReadingAssistantSheet> {
     ),
     child: Row(
       children: [
-        const Icon(Icons.shield_outlined, size: 13, color: Color(0xFF8492A7)),
+        const Icon(DesignIcons.shieldCheck, size: 13, color: Color(0xFF8492A7)),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
@@ -314,7 +315,7 @@ class _ReadingAssistantSheetState extends State<ReadingAssistantSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(
-              Icons.menu_book_outlined,
+              DesignIcons.bookOpen,
               size: 12,
               color: Color(0xFF7D8DA2),
             ),
@@ -329,7 +330,7 @@ class _ReadingAssistantSheetState extends State<ReadingAssistantSheet> {
               ),
             ),
             const SizedBox(width: 4),
-            const Icon(Icons.arrow_outward, size: 12, color: Color(0xFF7D8DA2)),
+            const Icon(DesignIcons.arrowUpRight, size: 12, color: Color(0xFF7D8DA2)),
           ],
         ),
       ),
@@ -346,7 +347,7 @@ class _ReadingAssistantSheetState extends State<ReadingAssistantSheet> {
         padding: const EdgeInsets.all(7),
         color: const Color(0xFFA3ABB8),
         onPressed: _copyAnswer,
-        icon: const Icon(Icons.copy_outlined),
+        icon: const Icon(DesignIcons.copy),
       ),
       IconButton(
         key: const Key('assistant-save'),
@@ -356,7 +357,7 @@ class _ReadingAssistantSheetState extends State<ReadingAssistantSheet> {
         padding: const EdgeInsets.all(7),
         color: const Color(0xFFA3ABB8),
         onPressed: _saveToNotes,
-        icon: const Icon(Icons.bookmark_border),
+        icon: const Icon(DesignIcons.bookmark),
       ),
       const SizedBox(width: 4),
       Expanded(
@@ -434,7 +435,7 @@ class _ReadingAssistantSheetState extends State<ReadingAssistantSheet> {
               customBorder: const CircleBorder(),
               onTap: () => _ask(_input.text),
               child: const Icon(
-                Icons.arrow_upward,
+                DesignIcons.arrowUp,
                 size: 16,
                 color: Colors.white,
               ),

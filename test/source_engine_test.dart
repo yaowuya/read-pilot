@@ -424,10 +424,16 @@ void main() {
   );
 
   test(
-    'rejects an unsafe content replacement before writing a chapter',
+    'skips an unsafe content replacement and still returns chapter text',
     () async {
       final engine = SourceEngine(
-        client: MockClient((_) async => http.Response('正文', 200)),
+        client: MockClient(
+          (_) async => http.Response(
+            '<article>正文</article>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          ),
+        ),
       );
       addTearDown(engine.close);
       final raw = sourceJson()
@@ -437,23 +443,50 @@ void main() {
         };
       final source = importer.parse(jsonEncode(raw)).single;
 
-      await expectLater(
-        engine.loadChapter(
-          source,
-          Chapter(
-            id: 'chapter-unsafe-replacement',
-            title: '第一章',
-            url: 'https://books.example/chapter/unsafe-replacement',
-          ),
+      final chapter = await engine.loadChapter(
+        source,
+        Chapter(
+          id: 'chapter-unsafe-replacement',
+          title: '第一章',
+          url: 'https://books.example/chapter/unsafe-replacement',
         ),
-        throwsA(
-          isA<SourceException>().having(
-            (error) => error.message,
-            'message',
-            contains('replaceRegex'),
+      );
+
+      expect(chapter.paragraphs, ['正文']);
+    },
+  );
+
+  test(
+    'loads chapter for id.nr1@textNodes## with ##delete replaceRegex',
+    () async {
+      final engine = SourceEngine(
+        client: MockClient(
+          (_) async => http.Response(
+            '<div id="nr1">第一章正文<br>广告词<br>第二段</div>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
           ),
         ),
       );
+      addTearDown(engine.close);
+      final raw = sourceJson()
+        ..['ruleContent'] = {
+          'content': r'id.nr1@textNodes##',
+          'replaceRegex': r'##广告词',
+        };
+      final source = importer.parse(jsonEncode(raw)).single;
+
+      final chapter = await engine.loadChapter(
+        source,
+        Chapter(
+          id: 'chapter-aiqi-shape',
+          title: '第一章',
+          url: 'https://books.example/chapter/aiqi-shape',
+        ),
+      );
+
+      expect(chapter.paragraphs.join('\n'), contains('第一章正文'));
+      expect(chapter.paragraphs.join('\n'), isNot(contains('广告词')));
     },
   );
 

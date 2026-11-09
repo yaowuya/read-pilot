@@ -5,6 +5,7 @@ import 'package:html/dom.dart' as dom;
 import 'package:json_path/json_path.dart';
 
 import '../../domain/source_rule_support.dart';
+import 'rule_session.dart';
 import 'rule_tokenizer.dart';
 import 'script_runtime.dart';
 
@@ -76,27 +77,65 @@ final class _LegacyTextQuery {
 
 /// Evaluates the safe declarative subset of imported source rules.
 class RuleInterpreter {
-  const RuleInterpreter({
+  RuleInterpreter({
     this.maxOutputCharacters = 2 * 1024 * 1024,
     RuleTokenizer tokenizer = const RuleTokenizer(),
-  }) : _tokenizer = tokenizer;
+    RuleSession? session,
+  }) : _tokenizer = tokenizer,
+       session = session ?? RuleSession();
 
   final int maxOutputCharacters;
   final RuleTokenizer _tokenizer;
 
+  /// Variables for the current engine workflow call (`@put:` / `@get:`).
+  final RuleSession session;
+
+  static final _putPattern = RegExp(
+    r'@put:(\{[^}]*\})',
+    caseSensitive: false,
+  );
+  static final _getPattern = RegExp(
+    r'@get:\{([^}]*)\}',
+    caseSensitive: false,
+  );
+
   bool isJsonRule(String? rule) => rule != null && _isJsonRule(rule);
 
   List<RuleNode> select(RuleNode input, String rule) {
-    for (final rawBranch in _tokenizer.splitTopLevel(rule, '||')) {
-      final branch = rawBranch.trim();
-      final nodes = _isJsonRule(branch)
-          ? _jsonValues(input, branch).map(RuleNode.json).toList()
-          : _isXPathRule(branch)
-          ? _selectXPath(input, branch)
-          : _selectCss(input, branch);
-      if (nodes.isNotEmpty) return List.unmodifiable(nodes);
+    final prepared = _applyPutsAndGets(input, rule);
+    return _selectCombined(input, prepared, allowThrow: true);
+  }
+
+  List<RuleNode> _selectCombined(
+    RuleNode input,
+    String rule, {
+    required bool allowThrow,
+  }) {
+    final (operator, branches) = _splitCombine(rule);
+    if (branches.length == 1) {
+      return List.unmodifiable(
+        _selectSingle(
+          input,
+          branches.single.trim(),
+          swallowErrors: !allowThrow,
+        ),
+      );
     }
-    return const [];
+
+    final results = <List<RuleNode>>[];
+    for (final rawBranch in branches) {
+      final branch = rawBranch.trim();
+      // Nested combines swallow branch errors so `||` / `&&` can continue.
+      final nodes = _selectCombined(input, branch, allowThrow: false);
+      if (nodes.isEmpty) continue;
+      results.add(nodes);
+      if (operator == '||') break;
+    }
+    if (results.isEmpty) return const [];
+    if (operator == '%%') {
+      return List.unmodifiable(_interleave(results));
+    }
+    return List.unmodifiable([for (final group in results) ...group]);
   }
 
   String extract(RuleNode input, String? rule) => _extract(input, rule);
@@ -106,23 +145,28 @@ class RuleInterpreter {
 
   String _extract(RuleNode input, String? rule, {bool firstOnly = false}) {
     if (rule == null || rule.isEmpty) return '';
-    for (final rawBranch in _tokenizer.splitTopLevel(rule, '||')) {
-      final branch = rawBranch.contains('##')
-          ? rawBranch.trimLeft()
-          : rawBranch.trim();
-      final replacement = _regexReplacement(branch);
-      final baseRule = replacement?.rule ?? branch;
-      var value = _isJsonRule(baseRule)
-          ? _extractJson(input, baseRule, firstOnly: firstOnly)
-          : _isXPathRule(baseRule)
-          ? _extractXPath(input, baseRule, firstOnly: firstOnly)
-          : _extractCss(input, baseRule, firstOnly: firstOnly);
-      if (replacement != null && value.isNotEmpty) {
-        value = _applyRegex(value, replacement);
-      }
-      if (value.isNotEmpty) return value;
+    final prepared = _applyPutsAndGets(input, rule);
+    final (operator, branches) = _splitCombine(prepared);
+    if (branches.length == 1) {
+      return _extractSingle(input, branches.single, firstOnly: firstOnly);
     }
-    return '';
+
+    final values = <String>[];
+    for (final rawBranch in branches) {
+      // Recurse so a later `||` branch may still contain `&&` / `%%`.
+      final value = _extract(input, rawBranch, firstOnly: firstOnly);
+      if (value.isEmpty) continue;
+      values.add(value);
+      if (operator == '||') break;
+    }
+    if (values.isEmpty) return '';
+    if (operator == '%%') {
+      final parts = [
+        for (final value in values) value.split('\n'),
+      ];
+      return _interleave(parts).join('\n');
+    }
+    return values.join('\n');
   }
 
   Future<String> extractWithScripts(
@@ -133,12 +177,15 @@ class RuleInterpreter {
     bool firstOnly = false,
   }) async {
     if (rule == null || rule.isEmpty) return '';
-    final marker = _tokenizer.indexOfTopLevel(rule.toLowerCase(), '@js:');
+    final prepared = _applyPutsAndGets(input, rule);
+    final marker = _tokenizer.indexOfTopLevel(prepared.toLowerCase(), '@js:');
     if (marker < 0) {
-      return firstOnly ? extractFirst(input, rule) : extract(input, rule);
+      return firstOnly
+          ? extractFirst(input, prepared)
+          : extract(input, prepared);
     }
-    final baseRule = rule.substring(0, marker);
-    final script = rule.substring(marker + 4).trim();
+    final baseRule = prepared.substring(0, marker);
+    final script = prepared.substring(marker + 4).trim();
     if (script.isEmpty) {
       throw const FormatException('JavaScript 后处理规则不能为空。');
     }
@@ -161,6 +208,131 @@ class RuleInterpreter {
       throw const FormatException('脚本处理结果过大。');
     }
     return value;
+  }
+
+  List<RuleNode> _selectSingle(
+    RuleNode input,
+    String branch, {
+    bool swallowErrors = true,
+  }) {
+    if (branch.isEmpty) return const [];
+    try {
+      return _isJsonRule(branch)
+          ? _jsonValues(input, branch).map(RuleNode.json).toList()
+          : _isXPathRule(branch)
+          ? _selectXPath(input, branch)
+          : _selectCss(input, branch);
+    } on FormatException {
+      if (!swallowErrors) rethrow;
+      return const [];
+    }
+  }
+
+  String _extractSingle(
+    RuleNode input,
+    String rawBranch, {
+    bool firstOnly = false,
+  }) {
+    final branch = rawBranch.contains('##')
+        ? rawBranch.trimLeft()
+        : rawBranch.trim();
+    final replacement = _regexReplacement(branch);
+    final baseRule = replacement?.rule ?? branch;
+    if (baseRule.trim().isEmpty) return '';
+    String value;
+    try {
+      value = _isJsonRule(baseRule)
+          ? _extractJson(input, baseRule, firstOnly: firstOnly)
+          : _isXPathRule(baseRule)
+          ? _extractXPath(input, baseRule, firstOnly: firstOnly)
+          : _extractCss(input, baseRule, firstOnly: firstOnly);
+    } on FormatException {
+      return '';
+    }
+    if (replacement != null &&
+        replacement.pattern.isNotEmpty &&
+        value.isNotEmpty) {
+      try {
+        value = _applyRegex(value, replacement);
+      } on FormatException {
+        // Keep the uncleaned extraction rather than failing the chapter.
+      }
+    }
+    return value;
+  }
+
+  /// Expands `@put:{...}` / `@get:{key}` against [session] for this rule only.
+  String _applyPutsAndGets(RuleNode input, String rule) {
+    var current = rule;
+    for (final match in _putPattern.allMatches(rule).toList().reversed) {
+      current = current.replaceRange(match.start, match.end, '');
+      final raw = match[1];
+      if (raw == null) continue;
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(raw);
+      } on FormatException {
+        // Malformed @put JSON is ignored; the surrounding rule may still run.
+        continue;
+      }
+      if (decoded is! Map) continue;
+      for (final entry in decoded.entries) {
+        final key = entry.key.toString();
+        final valueRule = entry.value?.toString() ?? '';
+        final extracted = valueRule.trim().isEmpty
+            ? ''
+            : _extractSingle(input, valueRule);
+        // Bounds failures must surface; only JSON shape errors are skipped.
+        session.put(
+          key,
+          extracted.isNotEmpty || _looksLikeRule(valueRule)
+              ? extracted
+              : valueRule,
+        );
+      }
+    }
+    return current.replaceAllMapped(_getPattern, (match) {
+      final key = match[1]?.trim() ?? '';
+      return session.get(key);
+    });
+  }
+
+  static bool _looksLikeRule(String value) {
+    final trimmed = value.trimLeft().toLowerCase();
+    return trimmed.startsWith('@') ||
+        trimmed.startsWith(r'$') ||
+        trimmed.startsWith('/') ||
+        trimmed.startsWith('class.') ||
+        trimmed.startsWith('id.') ||
+        trimmed.startsWith('tag.') ||
+        trimmed.startsWith('text.');
+  }
+
+  /// Picks the first top-level `&&` / `||` / `%%` and splits on that operator.
+  (String?, List<String>) _splitCombine(String rule) {
+    final andAt = _tokenizer.indexOfTopLevel(rule, '&&');
+    final orAt = _tokenizer.indexOfTopLevel(rule, '||');
+    final pctAt = _tokenizer.indexOfTopLevel(rule, '%%');
+    final candidates = <(int, String)>[
+      if (andAt >= 0) (andAt, '&&'),
+      if (orAt >= 0) (orAt, '||'),
+      if (pctAt >= 0) (pctAt, '%%'),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+    if (candidates.isEmpty) return (null, [rule]);
+    final operator = candidates.first.$2;
+    return (operator, _tokenizer.splitTopLevel(rule, operator));
+  }
+
+  static List<T> _interleave<T>(List<List<T>> groups) {
+    if (groups.isEmpty) return const [];
+    final output = <T>[];
+    final width = groups.first.length;
+    for (var index = 0; index < width; index++) {
+      for (final group in groups) {
+        if (index < group.length) output.add(group[index]);
+      }
+    }
+    return output;
   }
 
   List<RuleNode> _selectXPath(RuleNode input, String rule) {
@@ -477,6 +649,9 @@ class RuleInterpreter {
     return output.toString();
   }
 
+  /// Splits `selector##pattern##replacement`. Empty trailing `##` and invalid
+  /// cleanup keep the selector and skip replacement so one bad `##…` cannot
+  /// blank the whole chapter load.
   _RegexReplacement? _regexReplacement(String rule) {
     final first = rule.indexOf('##');
     if (first < 0) return null;
@@ -485,14 +660,16 @@ class RuleInterpreter {
         ? rule.substring(first + 2)
         : rule.substring(first + 2, second);
     final replacement = second < 0 ? '' : rule.substring(second + 2);
-    if (first == 0 || pattern.isEmpty) {
-      throw const FormatException('正则替换规则缺少选择规则或匹配表达式。');
-    }
-    if (!SourceRuleSupport.isSafeRegex(pattern, replacement)) {
-      throw const FormatException('正则表达式超出安全子集。');
+    final base = first > 0 ? rule.substring(0, first) : '';
+    // Leading `##` belongs to whole-chapter replaceRegex, not field extractors.
+    // Empty pattern (selector##) is a no-op cleanup and keeps the selector.
+    if (first == 0 ||
+        pattern.isEmpty ||
+        !SourceRuleSupport.isSafeRegex(pattern, replacement)) {
+      return _RegexReplacement(rule: base, pattern: '', replacement: '');
     }
     return _RegexReplacement(
-      rule: rule.substring(0, first),
+      rule: base,
       pattern: pattern,
       replacement: replacement,
     );

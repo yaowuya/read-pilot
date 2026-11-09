@@ -27,6 +27,15 @@ class SourceRuntimeProfile {
   final Set<SourceCapability> implemented;
   final Set<SourceCapability> permitted;
 
+  /// Capabilities whose support is decided per-rule via
+  /// [SourceCapabilityRequirement.implementedProfiles], not the profile set
+  /// alone (unsafe XPath / catastrophic regex / unrestricted JS stay blocked).
+  static const profileGated = {
+    SourceCapability.xpath,
+    SourceCapability.regex,
+    SourceCapability.javascript,
+  };
+
   static const nativeCore = SourceRuntimeProfile(
     name: 'native-core',
     implemented: {
@@ -34,12 +43,16 @@ class SourceRuntimeProfile {
       SourceCapability.explore,
       SourceCapability.jsonPath,
       SourceCapability.contentPagination,
+      SourceCapability.xpath,
+      SourceCapability.regex,
     },
     permitted: {
       SourceCapability.staticHeaders,
       SourceCapability.explore,
       SourceCapability.jsonPath,
       SourceCapability.contentPagination,
+      SourceCapability.xpath,
+      SourceCapability.regex,
     },
   );
   static const androidCore = SourceRuntimeProfile(
@@ -49,12 +62,18 @@ class SourceRuntimeProfile {
       SourceCapability.explore,
       SourceCapability.jsonPath,
       SourceCapability.contentPagination,
+      SourceCapability.xpath,
+      SourceCapability.regex,
+      SourceCapability.javascript,
     },
     permitted: {
       SourceCapability.staticHeaders,
       SourceCapability.explore,
       SourceCapability.jsonPath,
       SourceCapability.contentPagination,
+      SourceCapability.xpath,
+      SourceCapability.regex,
+      SourceCapability.javascript,
     },
   );
   static const webCore = SourceRuntimeProfile(
@@ -63,11 +82,15 @@ class SourceRuntimeProfile {
       SourceCapability.explore,
       SourceCapability.jsonPath,
       SourceCapability.contentPagination,
+      SourceCapability.xpath,
+      SourceCapability.regex,
     },
     permitted: {
       SourceCapability.explore,
       SourceCapability.jsonPath,
       SourceCapability.contentPagination,
+      SourceCapability.xpath,
+      SourceCapability.regex,
     },
   );
 }
@@ -117,12 +140,8 @@ class SourceCapabilityReport {
              path: requirement.path,
              capability: requirement.capability,
              message: requirement.message,
-             runtimeImplemented:
-                 profile.implemented.contains(requirement.capability) ||
-                 requirement.implementedProfiles.contains(profile.name),
-             platformPermitted:
-                 profile.permitted.contains(requirement.capability) ||
-                 requirement.permittedProfiles.contains(profile.name),
+             runtimeImplemented: _runtimeImplemented(profile, requirement),
+             platformPermitted: _platformPermitted(profile, requirement),
            ),
          ),
        );
@@ -135,4 +154,26 @@ class SourceCapabilityReport {
       diagnostics.every((diagnostic) => diagnostic.runtimeImplemented);
   bool get platformPermitted =>
       diagnostics.every((diagnostic) => diagnostic.platformPermitted);
+
+  static bool _runtimeImplemented(
+    SourceRuntimeProfile profile,
+    SourceCapabilityRequirement requirement,
+  ) {
+    if (SourceRuntimeProfile.profileGated.contains(requirement.capability)) {
+      return requirement.implementedProfiles.contains(profile.name);
+    }
+    return profile.implemented.contains(requirement.capability) ||
+        requirement.implementedProfiles.contains(profile.name);
+  }
+
+  static bool _platformPermitted(
+    SourceRuntimeProfile profile,
+    SourceCapabilityRequirement requirement,
+  ) {
+    if (SourceRuntimeProfile.profileGated.contains(requirement.capability)) {
+      return requirement.permittedProfiles.contains(profile.name);
+    }
+    return profile.permitted.contains(requirement.capability) ||
+        requirement.permittedProfiles.contains(profile.name);
+  }
 }

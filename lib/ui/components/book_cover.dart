@@ -11,12 +11,16 @@ class BookCover extends StatefulWidget {
     super.key,
     required this.book,
     this.imageLoader,
+    this.onMissingCover,
     this.width = 120,
     this.height = 164,
   });
 
   final Book book;
   final Future<Uint8List?> Function(Book book)? imageLoader;
+
+  /// Called once when a remote book has no cover URL yet.
+  final Future<void> Function(Book book)? onMissingCover;
   final double width;
   final double height;
 
@@ -31,6 +35,11 @@ class _BookCoverState extends State<BookCover> {
   void initState() {
     super.initState();
     _reload();
+    if (widget.book.coverUrl == null &&
+        widget.book.isRemote &&
+        widget.onMissingCover != null) {
+      widget.onMissingCover!(widget.book);
+    }
   }
 
   @override
@@ -56,11 +65,8 @@ class _BookCoverState extends State<BookCover> {
     excludeSemantics: true,
     label: '${widget.book.title}封面',
     image: true,
-    child: ClipRRect(
-      borderRadius: const BorderRadius.only(
-        topRight: Radius.circular(5),
-        bottomRight: Radius.circular(5),
-      ),
+      child: ClipRRect(
+      borderRadius: BorderRadius.circular(4),
       child: SizedBox(
         width: widget.width,
         height: widget.height,
@@ -135,13 +141,6 @@ class _GeneratedCover extends StatelessWidget {
         children: [
           Positioned.fill(
             child: CustomPaint(painter: _CoverArt(index, _inks[index])),
-          ),
-          Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 5,
-            child: ColoredBox(color: _inks[index].withValues(alpha: .12)),
           ),
           Padding(
             padding: EdgeInsets.fromLTRB(

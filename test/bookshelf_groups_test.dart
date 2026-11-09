@@ -50,14 +50,11 @@ void main() {
     await tester.tap(find.byKey(const Key('shelf-group-close')));
     await tester.pumpAndSettle();
 
-    // The shelf gains one card per group once a group exists, and the books
-    // that still belong to no group keep their place below the cards.
+    // Folder shares the root grid with ungrouped books; no 全部书籍 card / sort tabs.
     expect(find.byKey(Key('shelf-group-${group.id}')), findsOneWidget);
-    expect(find.byKey(const Key('shelf-group-all')), findsOneWidget);
-    expect(find.text('默认'), findsOneWidget);
-    expect(find.text('进度'), findsOneWidget);
-    expect(find.text('书名'), findsOneWidget);
-    expect(find.text('分类'), findsOneWidget);
+    expect(find.byKey(const Key('shelf-group-all')), findsNothing);
+    expect(find.text('默认'), findsNothing);
+    expect(find.byKey(const Key('shelf-sort-title')), findsNothing);
     await tester.scrollUntilVisible(
       find.byKey(const Key('book-public-fusheng')),
       180,
@@ -68,12 +65,10 @@ void main() {
 
     await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
     await tester.pumpAndSettle();
-    expect(find.text('分组里还没有书'), findsOneWidget);
+    expect(find.text('这个分组还没有书'), findsOneWidget);
     expect(find.byKey(const Key('book-public-fusheng')), findsNothing);
 
     await tester.tap(find.byKey(const Key('shelf-scope-back')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('shelf-group-all')));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.byKey(const Key('book-public-fusheng')),
@@ -94,15 +89,6 @@ void main() {
     await tester.tap(find.byKey(const Key('shelf-group-membership-close')));
     await tester.pumpAndSettle();
 
-    // The header scrolls with the grid, so bring it back before tapping 返回.
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('shelf-scope-back')),
-      -180,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('shelf-scope-back')));
-    await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);

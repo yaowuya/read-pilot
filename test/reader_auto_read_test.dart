@@ -6,6 +6,8 @@ import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:sembast/sembast_memory.dart';
 
+import 'support/reader_chrome.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Database database;
@@ -56,8 +58,7 @@ void main() {
     expect(indicator, findsOneWidget);
     final before = tester.widget<Text>(indicator).data;
 
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-auto-read')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('5 秒 / 页'));
@@ -67,8 +68,7 @@ void main() {
 
     expect(tester.widget<Text>(indicator).data, isNot(before));
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-auto-read')));
     await tester.pumpAndSettle();
     expect(find.text('停止自动翻页'), findsOneWidget);
@@ -95,8 +95,7 @@ void main() {
     final indicator = find.byKey(const Key('reader-page-indicator'));
     final before = tester.widget<Text>(indicator).data;
 
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-auto-read')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('5 秒 / 页'));

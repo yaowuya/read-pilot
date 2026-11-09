@@ -17,7 +17,25 @@
 - commit `b21025d3769ec9c4028514914f3c555a1ba284b8`
 - GPL-3.0，仅用于互操作规格研究；实现边界见 [CLEAN_ROOM.md](CLEAN_ROOM.md)。
 
-## 当前实现（2026-10-31）
+## 相对 legado-with-MD3 核心差距
+
+对照参考仓公开行为（`WebBook` / `AnalyzeRule` 可观察输入输出）与本仓实现，按三栏区分，避免把「跳过非法规则」说成「已完全兼容」。
+
+| 能力 | 已复刻 | 本轮补齐 | 安全拒绝（保持） |
+| --- | --- | --- | --- |
+| 书源 JSON 导入/启停/分组/字段保留/健康诊断 | ✓ | — | — |
+| 搜索 / 发现 / 详情 / 目录分页 / 正文分页 / 封面同源 / 章节缓存 | ✓ | — | — |
+| CSS + legacy、`\|\|` fallback、有界 `##` 替换、XPath 安全子集、JSONPath | ✓ | — | 复杂 XPath / JSONPath 正则函数 |
+| `&&` 多选拼接、`%%` 交错合并 | — | ✓ 规则解释器 | — |
+| `@put:` / `@get:` 会话变量 | — | ✓ 单次 search/loadBook/loadChapter 有界 Map | 跨书源共享、WebView/登录态变量 |
+| `replaceRegex`：`pattern##repl`、`##pattern` 删除、选择器尾部空 `##` | 部分（仅安全 `pattern##repl`；非法曾硬失败后改为跳过） | ✓ 删除式与空 `##` 语义收敛；不安全仍诊断+跳过正文清洗 | 无界/回溯爆炸正则、trust-all 清理 |
+| Android QuickJS `@js:` / `<js>` 沙箱 | ✓（Android 验证） | 能力画像与运行态对齐 | Web `eval`、Rhino Java/Ajax、无期限脚本 |
+| 换源：并发搜候选 → 目录 → 锚点映射 → 原子写库 | ✓ | — | — |
+| `loginUrl` / `loginUi` / Cookie jar / trust-all TLS / 媒体书源 | — | — | ✓ 字段保留 + 能力诊断，不执行 |
+
+「跳过非法 `replaceRegex`」只保证章节仍可读，不宣称广告清洗已与 Legado 逐条一致。
+
+## 当前实现（2026-11-09）
 
 | 能力 | Android | Web | 说明 |
 | --- | --- | --- | --- |
@@ -29,7 +47,7 @@
 | CSS 与 legacy | 已实现子集 | 已实现子集 | CSS、`class.*`、`id.*`、`tag.*`、bare `text/href`、`text.文本@属性` |
 | XPath | 安全子集 | 安全子集 | 普通 HTML 上支持元素路径、属性等值/contains、位置、`text()` 与属性；复杂 XPath 仍诊断为未完整兼容 |
 | JSONPath | RFC 9535 已实现 | RFC 9535 已实现 | 使用 `json_path`；正则函数因不可终止风险而拒绝 |
-| regex/组合/变量 | 部分 | 部分 | 安全 `ruleContent.replaceRegex` 支持单条 `正则##替换文本`；提取字段的有界替换和 `||` fallback 保留；`&&`、`%%`、put/get 未在公开文档确认语义，保持 blocked |
+| regex/组合/变量 | 已实现子集 | 已实现子集 | `\|\|` fallback、`&&` 拼接、`%%` 交错；有界 `@put:`/`@get:` 会话变量；`replaceRegex` 支持安全 `pattern##替换` 与 `##pattern` 删除；选择器尾部空 `##` 只保留选择器；不安全正则诊断后跳过清洗，不吞正文 |
 | 正文段落 | 已实现 | 已实现 | 逻辑段落首行两字几何缩进；续页不重复缩进；HTML `br`/常见实体边界、空段、首部重复章名与相邻重复段安全归一；不默认自动重分段 |
 | 搜索/发现/详情/目录/正文 | 已实现 | 安全子集 | 发现分类（`url`/`text`/`button`/`toggle`/`select` 五种 `ExploreKind`，JSON 数组与 `title::url` 旧式写法）、分页、循环检测、去重、取消；跨来源搜索并发上限 16（对齐 Legado `threadCount`），书源声明的 `concurrentRate` 按 `bookSourceUrl` 限速 |
 | 目录/正文分页 | 已实现 | 已实现 | 目录最多翻 500 页，到上限或连续 10 页无新章节时保留已解析目录；正文最多读 50 页，到上限保留已取到的正文；目录最多 10,000 章，不静默截断 |

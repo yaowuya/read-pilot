@@ -11,6 +11,7 @@ import '../components/design.dart';
 import '../components/source_edit_sheet.dart';
 import '../components/source_health_sheet.dart';
 import '../components/source_import_sheet.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 
 /// 书源管理：一个可搜索、可筛选、可批量操作的书源清单。
@@ -103,7 +104,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
         CircleIconButton(
           key: const Key('import-source'),
           tooltip: '添加书源',
-          icon: Icons.add,
+          icon: DesignIcons.plus,
           onPressed: _import,
         ),
       ],
@@ -140,7 +141,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                     '导入 Legado 风格的声明式书源。Android 仅在受限沙箱中执行规则脚本，Web 不执行脚本。',
                 action: OutlinedButton.icon(
                   onPressed: _import,
-                  icon: const Icon(Icons.file_upload_outlined, size: 19),
+                  icon: const Icon(DesignIcons.fileJson, size: 19),
                   label: const Text('导入 JSON 书源'),
                 ),
               )
@@ -157,14 +158,14 @@ class _SourcesScreenState extends State<SourcesScreen> {
               children: [
                 ListRow(
                   key: const Key('sources-help-what'),
-                  icon: Icons.help_outline,
+                  icon: DesignIcons.circleHelp,
                   title: '什么是书源？',
                   iconColor: const Color(0xFF747E8B),
                   onTap: _showHelp,
                 ),
                 ListRow(
                   key: const Key('sources-help-import'),
-                  icon: Icons.data_object,
+                  icon: DesignIcons.fileJson,
                   title: '从 JSON 文件导入',
                   iconColor: const Color(0xFF747E8B),
                   onTap: _import,
@@ -277,7 +278,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
               key: const Key('source-search-clear'),
               tooltip: '清除搜索',
               onPressed: () => setState(_search.clear),
-              icon: const Icon(Icons.close, size: 16, color: AppColors.muted),
+              icon: const Icon(DesignIcons.close, size: 16, color: AppColors.muted),
             ),
           ),
           const SizedBox(height: 10),
@@ -290,7 +291,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
             alignment: Alignment.centerLeft,
             child: ActionChip(
               key: const Key('source-group-filter'),
-              avatar: const Icon(Icons.filter_list, size: 18),
+              avatar: const Icon(DesignIcons.sliders, size: 18),
               label: Text(_group == null ? '全部分组' : _group!),
               onPressed: () => _openGroupFilter(groups),
             ),
@@ -310,7 +311,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                   _searching = !_searching;
                   if (!_searching) _search.clear();
                 }),
-                icon: Icon(_searching ? Icons.close : Icons.search, size: 18),
+                icon: Icon(_searching ? DesignIcons.close : DesignIcons.search, size: 18),
                 label: const Text('搜索'),
               ),
               TextButton.icon(
@@ -322,7 +323,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                         if (!_selecting) _selected.clear();
                       }),
                 icon: Icon(
-                  _selecting ? Icons.close : Icons.checklist,
+                  _selecting ? DesignIcons.close : DesignIcons.listChecks,
                   size: 18,
                 ),
                 label: Text(_selecting ? '退出多选' : '选择'),
@@ -330,12 +331,12 @@ class _SourcesScreenState extends State<SourcesScreen> {
               TextButton.icon(
                 key: const Key('source-export'),
                 onPressed: sources.isEmpty ? null : _export,
-                icon: const Icon(Icons.copy_all_outlined, size: 18),
+                icon: const Icon(DesignIcons.copy, size: 18),
                 label: const Text('导出'),
               ),
               TextButton.icon(
                 onPressed: _import,
-                icon: const Icon(Icons.file_upload_outlined, size: 18),
+                icon: const Icon(DesignIcons.fileJson, size: 18),
                 label: const Text('导入'),
               ),
             ],
@@ -447,7 +448,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
       children: [
         const Padding(
           padding: EdgeInsets.only(top: 2),
-          child: Icon(Icons.info_outline, size: 15, color: Color(0xFFAC9874)),
+          child: Icon(DesignIcons.info, size: 15, color: Color(0xFFAC9874)),
         ),
         const SizedBox(width: 8),
         const Expanded(
@@ -477,7 +478,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         textStyle: const TextStyle(fontSize: 14),
       ),
-      icon: const Icon(Icons.add, size: 18),
+      icon: const Icon(DesignIcons.plus, size: 18),
       label: const Text('添加书源'),
     ),
   );
@@ -488,7 +489,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
       const Padding(
         padding: EdgeInsets.only(top: 1),
         child: Icon(
-          Icons.menu_book_outlined,
+          DesignIcons.bookOpen,
           size: 14,
           color: Color(0xFFA7ADB7),
         ),
@@ -541,8 +542,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
                     padding: const EdgeInsets.only(right: 8),
                     child: Icon(
                       selected
-                          ? Icons.check_circle
-                          : Icons.radio_button_unchecked,
+                          ? DesignIcons.circleCheck
+                          : DesignIcons.circle,
                       size: 20,
                       color: selected ? AppColors.blue : AppColors.muted,
                     ),
@@ -556,7 +557,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                     borderRadius: BorderRadius.circular(9),
                   ),
                   child: const Icon(
-                    Icons.public,
+                    DesignIcons.globe,
                     size: 19,
                     color: Color(0xFF8CA1BD),
                   ),
@@ -682,7 +683,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                         key: Key('source-menu-${source.id}'),
                         tooltip: '${source.name}的更多操作',
                         icon: const Icon(
-                          Icons.more_horiz,
+                          DesignIcons.ellipsis,
                           size: 20,
                           color: AppColors.muted,
                         ),
