@@ -269,8 +269,8 @@ class ReadingAssistantSheet extends StatelessWidget {
 
 - [x] 9.1 `dart format lib test` 后跑三项门禁；测试数不得低于 640。（660 passed / 1 skipped，`3bee9bd`）
 - [x] 9.2 `flutter build apk --release`，`adb install -r` 到 MuMu，逐屏截图走查 27 个页面对应界面。（APK sha256 `1164665954…6470e76c`；重点屏 阅读页沉浸/工具栏/更多菜单/夜间 #202225 真机验证通过，其余屏在 beta9/beta10 走查已覆盖）
-- [ ] 9.3 清理 `.tmp-design/`、`.tmp-shots/`；更新 `docs/PROGRESS.md` 与 `docs/LEGADO_MIGRATION_STATUS.md`（涉及书源/换源的部分）。
-- [ ] 9.4 提交并 push `origin/feat/flutter-reader`；产出 beta10 APK 并交付。
+- [x] 9.3 清理 `.tmp-design/`、`.tmp-shots/`；更新 `docs/PROGRESS.md` 与 `docs/LEGADO_MIGRATION_STATUS.md`（涉及书源/换源的部分）。（`dc6cd82`）
+- [x] 9.4 提交并 push `origin/feat/flutter-reader`；产出 beta10 APK 并交付。（`3bee9bd`…`dc6cd82` 已推送；APK `build/app/outputs/flutter-apk/read-pilot-v0.1.0-beta10.apk`，sha256 `1164665954d648e5044d3aef26a0bba53034168cdbeb1b150c2947786470e76c`）
 
 ## Completion record
 
