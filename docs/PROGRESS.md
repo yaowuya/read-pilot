@@ -1,5 +1,13 @@
 # 实施进度
 
+## 2026-11-09 阅读页排版与工具栏对齐设计稿（Task 6.1/6.2 收尾）
+
+- 首段不缩进贯穿排版器：`ReaderPaginator` 的 fragment 现在携带 `indent` 标记（首段=不缩进，其余段首行缩进两字），渲染与测量共用同一规则；`ReaderParagraph` 支持显式 `indent` 覆盖，滚动阅读第一段也不缩进。分页正文底部 padding 16→44、滚动 80→104，为叠在正文之上的页脚让位。
+- 夜间配色按设计稿改为 `#202225` 背景 / `#C3C0B8` 正文（`ReaderPalette._dark`，muted `#8B8D8F`）。MuMu 真机像素采样确认：纸白 `#F4EFDC` → 夜间 `#202225` 精确生效。
+- 工具顶栏收敛为 返回 / 书名·章节两行 / 添加书签笔记 / **阅读更多操作**（`reader-more` PopupMenu：书内查找、本书笔记、切换到夜间）；底栏移除独立夜间按钮，保留 上一章 / 目录 / 换源 / 设置 / 下一章 五控件。原 `reader-search`/`reader-tool-notes`/`reader-theme-toggle` key 移进菜单项继续可用。
+- plan 回填：`docs/superpowers/plans/2026-11-08-design-refresh.md` 的 Task 1–9 checkbox 全部勾选并注明提交号，补齐「Completion record」与「Self-review」两节。
+- 验证：`dart format` 160 文件 0 修改；`flutter analyze` 无问题；`flutter test` **660 项通过 / 1 项跳过**。MuMu 真机走查：书架、阅读页沉浸态（章节名 + 页码页脚）、工具栏（返回/书签/更多 + 目录/换源/设置）、更多菜单三项、夜间切换全部通过；APK beta10 sha256 `1164665954…6470e76c`。
+
 ## 2026-11-08 按完整设计稿重排全应用
 
 用户要求按 `docs/阅读助手_完整设计稿.html`（27 屏、5 组）重构整个 App，并按 superpowers 工作流先写 spec 与 plan 再实施。规格见 `docs/superpowers/specs/2026-11-08-design-refresh.md`，计划见 `docs/superpowers/plans/2026-11-08-design-refresh.md`（Task 1–9）。
