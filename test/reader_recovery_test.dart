@@ -184,6 +184,15 @@ void main() {
   }
 
   // 阅读页默认沉浸式，需要先点正文中部唤出工具栏才能操作顶栏与底栏。
+  /// 主题切换现在收在顶栏「更多」菜单里（设计稿 reader-more），
+  /// 测试里用这个帮助方法替代原来直点的 reader-theme-toggle 按钮。
+  Future<void> toggleThemeFromMoreMenu(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('reader-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-tool-theme')));
+    await tester.pumpAndSettle();
+  }
+
   Future<void> showChrome(WidgetTester tester) async {
     final body =
         find.byKey(const Key('reader-paged-view')).evaluate().isNotEmpty
@@ -539,12 +548,10 @@ void main() {
       await openReader(tester);
       await showChrome(tester);
       final anchor = controller.book(_bookId)!.position.paragraphIndex;
-      await tester.tap(find.byKey(const Key('reader-theme-toggle')));
-      await tester.pumpAndSettle();
+      await toggleThemeFromMoreMenu(tester);
       expect(controller.settings.theme, ReaderTheme.dark);
       expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
-      await tester.tap(find.byKey(const Key('reader-theme-toggle')));
-      await tester.pumpAndSettle();
+      await toggleThemeFromMoreMenu(tester);
       expect(controller.settings.theme, ReaderTheme.paper);
       expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
       expect(tester.takeException(), isNull);
@@ -726,6 +733,8 @@ void main() {
   ) async {
     await openReader(tester);
     await showChrome(tester);
+    await tester.tap(find.byKey(const Key('reader-more')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-search')));
     await tester.pumpAndSettle();
     expect(find.text('仅检索已缓存的 1 / 2 章'), findsOneWidget);
@@ -986,14 +995,12 @@ void main() {
     expect(pages.page, 1);
 
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-theme-toggle')));
-    await tester.pumpAndSettle();
+    await toggleThemeFromMoreMenu(tester);
     expect(controller.settings.theme, ReaderTheme.dark);
     expect(tester.widget<PageView>(paged).controller, same(pages));
     expect(pages.page, 1);
 
-    await tester.tap(find.byKey(const Key('reader-theme-toggle')));
-    await tester.pumpAndSettle();
+    await toggleThemeFromMoreMenu(tester);
     expect(controller.settings.theme, ReaderTheme.sage);
     expect(tester.widget<PageView>(paged).controller, same(pages));
     expect(pages.page, 1);
@@ -1020,7 +1027,7 @@ void main() {
     await tester.pumpAndSettle();
     await showChrome(tester);
     expect(find.byKey(const Key('reader-settings')), findsOneWidget);
-    expect(find.byKey(const Key('reader-theme-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('reader-more')), findsOneWidget);
     expect(
       find.descendant(
         of: find.byKey(const Key('reader-next')),

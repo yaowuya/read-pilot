@@ -76,7 +76,8 @@ void main() {
       );
       var offset = 0;
       for (final fragment in layout.pages.expand((page) => page.fragments)) {
-        final indent = !fragment.isContinuation;
+        // 首段按设计稿不缩进；渲染缩进必须与排版测量使用同一规则。
+        final indent = fragment.indent;
         final painter = ReaderParagraph.layout(
           text: input.substring(offset),
           style: bodyStyle,

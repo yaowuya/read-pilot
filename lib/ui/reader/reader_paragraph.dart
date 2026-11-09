@@ -14,6 +14,7 @@ class ReaderParagraph extends StatelessWidget {
     required this.text,
     required this.style,
     this.isContinuation = false,
+    this.indent,
     this.selectable = false,
     this.highlights = const [],
     this.onSelectionChanged,
@@ -22,6 +23,11 @@ class ReaderParagraph extends StatelessWidget {
   final String text;
   final TextStyle style;
   final bool isContinuation;
+
+  /// 首行缩进开关。null 时由 [isContinuation] 推导：续段不缩进。
+  ///
+  /// 章节正文的第一段按设计稿不缩进，它并不是续段，所以需要单独覆盖。
+  final bool? indent;
   final bool selectable;
   final List<ReaderTextHighlight> highlights;
   final ValueChanged<String?>? onSelectionChanged;
@@ -120,12 +126,13 @@ class ReaderParagraph extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final indented = indent ?? !isContinuation;
     final paragraph = Text.rich(
-      textSpan(text, style, indent: !isContinuation, highlights: highlights),
+      textSpan(text, style, indent: indented, highlights: highlights),
       style: style,
       textAlign: TextAlign.justify,
       textScaler: TextScaler.noScaling,
-      semanticsLabel: isContinuation ? text : withoutSourceIndent(text),
+      semanticsLabel: indented ? withoutSourceIndent(text) : text,
     );
     return selectable
         ? SelectionArea(

@@ -12,6 +12,7 @@ final class ReaderPageFragment {
     required this.paragraphIndex,
     required this.text,
     required this.isContinuation,
+    required this.indent,
     required this.endsParagraph,
     required this.trailingSpacing,
   });
@@ -19,6 +20,9 @@ final class ReaderPageFragment {
   final int paragraphIndex;
   final String text;
   final bool isContinuation;
+
+  /// 这一段的第一行是否需要两字缩进；由排版规则决定，渲染必须与测量一致。
+  final bool indent;
   final bool endsParagraph;
   final double trailingSpacing;
 }
@@ -110,6 +114,7 @@ abstract final class ReaderPaginator {
             paragraphIndex: last.paragraphIndex,
             text: last.text,
             isContinuation: last.isContinuation,
+            indent: last.indent,
             endsParagraph: last.endsParagraph,
             trailingSpacing: 0,
           );
@@ -135,6 +140,9 @@ abstract final class ReaderPaginator {
     ) {
       final paragraph = paragraphs[paragraphIndex];
       if (ReaderParagraph.withoutSourceIndent(paragraph).isEmpty) continue;
+      // 章节正文的第一段按设计稿不缩进（设计稿的 .first-paragraph），
+      // 其余段落在首行缩进两字。
+      final firstParagraph = paragraphIndex == 0;
       var offset = 0;
       while (offset < paragraph.length) {
         var available = maxHeight - usedHeight;
@@ -149,7 +157,7 @@ abstract final class ReaderPaginator {
           bodyStyle,
           maxWidth,
           textDirection,
-          indent: offset == 0,
+          indent: offset == 0 && !firstParagraph,
         );
         if (remainingHeight <= available + 0.01) {
           final spacing = math.min(
@@ -161,6 +169,7 @@ abstract final class ReaderPaginator {
               paragraphIndex: paragraphIndex,
               text: remaining,
               isContinuation: offset > 0,
+              indent: offset == 0 && !firstParagraph,
               endsParagraph: true,
               trailingSpacing: math.max(0, spacing),
             ),
@@ -178,6 +187,7 @@ abstract final class ReaderPaginator {
           bodyStyle,
           maxWidth,
           textDirection,
+          firstParagraph: firstParagraph,
         );
         if (end <= offset) {
           if (fragments.isNotEmpty || showsHeader) {
@@ -192,6 +202,7 @@ abstract final class ReaderPaginator {
             paragraphIndex: paragraphIndex,
             text: text,
             isContinuation: offset > 0,
+            indent: offset == 0 && !firstParagraph,
             endsParagraph: false,
             trailingSpacing: 0,
           ),
@@ -201,7 +212,7 @@ abstract final class ReaderPaginator {
           bodyStyle,
           maxWidth,
           textDirection,
-          indent: offset == 0,
+          indent: offset == 0 && !firstParagraph,
         );
         offset = end;
         finishPage();
@@ -218,10 +229,11 @@ abstract final class ReaderPaginator {
     double availableHeight,
     TextStyle style,
     double width,
-    TextDirection direction,
-  ) {
+    TextDirection direction, {
+    required bool firstParagraph,
+  }) {
     final remaining = text.substring(start);
-    final indent = start == 0;
+    final indent = start == 0 && !firstParagraph;
     final removedIndent = indent
         ? remaining.length -
               ReaderParagraph.withoutSourceIndent(remaining).length

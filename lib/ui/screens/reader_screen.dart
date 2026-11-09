@@ -31,7 +31,9 @@ import 'notes_screen.dart';
 /// Vertical rhythm shared by the paged and scrolling readers. The paginator
 /// measures against these, so a page never renders text it did not reserve room for.
 const double _pagedTopPadding = 4;
-const double _pagedBottomPadding = 16;
+
+/// 页脚叠在正文之上，正文底部要为它留出高度，最后一行才不会被压住。
+const double _pagedBottomPadding = 44;
 
 /// Space between the chapter title and the first line of body text.
 const double _titleBodyGap = 16;
@@ -52,6 +54,10 @@ class ReaderScreen extends StatefulWidget {
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
+
+/// 工具顶栏「更多」菜单里的动作；设计稿的 reader-more sheet 在这里收敛成一个
+/// PopupMenu：搜索、笔记与主题切换不再占据顶栏的一排图标位。
+enum _ReaderMoreAction { search, notes, theme }
 
 class _ReaderScreenState extends State<ReaderScreen>
     with WidgetsBindingObserver {
@@ -701,7 +707,7 @@ class _ReaderScreenState extends State<ReaderScreen>
               width < 650 ? 24 : 48,
               36,
               width < 650 ? 24 : 48,
-              80,
+              104,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -731,6 +737,7 @@ class _ReaderScreenState extends State<ReaderScreen>
                       _chapter!.paragraphs[index],
                       ReaderParagraph(
                         text: chapter.paragraphs[index],
+                        indent: index != 0,
                         selectable: !_hasActiveDisplayRules,
                         highlights: _hasActiveDisplayRules
                             ? const []
@@ -1142,6 +1149,7 @@ class _ReaderScreenState extends State<ReaderScreen>
                                   ReaderParagraph(
                                     text: fragment.text,
                                     isContinuation: fragment.isContinuation,
+                                    indent: fragment.indent,
                                     style: bodyStyle,
                                   ),
                                 ),
@@ -1286,14 +1294,8 @@ class _ReaderScreenState extends State<ReaderScreen>
                     ),
               actions: _chromeVisible
                   ? [
-                      IconButton(
-                        key: const Key('reader-search'),
-                        tooltip: '书内查找',
-                        onPressed: _chapter == null || bindingChanged
-                            ? null
-                            : _showSearch,
-                        icon: const Icon(Icons.search, size: 23),
-                      ),
+                      // 工具顶栏按设计稿只留三件事：返回（leading）、书签、更多。
+                      // 搜索、笔记与更多操作收进 reader-more 菜单。
                       IconButton(
                         key: const Key('reader-bookmark'),
                         tooltip: '添加书签笔记',
@@ -1302,13 +1304,68 @@ class _ReaderScreenState extends State<ReaderScreen>
                             : _addNote,
                         icon: const Icon(Icons.bookmark_add_outlined, size: 23),
                       ),
-                      KeyedSubtree(
-                        key: const Key('reader-tool-notes'),
-                        child: IconButton(
-                          tooltip: '本书笔记',
-                          onPressed: () => _openNotes(book),
-                          icon: const Icon(Icons.notes_outlined, size: 22),
-                        ),
+                      PopupMenuButton<_ReaderMoreAction>(
+                        key: const Key('reader-more'),
+                        tooltip: '阅读更多操作',
+                        icon: const Icon(Icons.more_horiz, size: 23),
+                        color: Colors.white,
+                        itemBuilder: (menuContext) => [
+                          PopupMenuItem(
+                            key: const Key('reader-search'),
+                            value: _ReaderMoreAction.search,
+                            enabled: _chapter != null && !bindingChanged,
+                            child: const Row(
+                              children: [
+                                Icon(Icons.search, size: 20),
+                                SizedBox(width: 12),
+                                Text('书内查找'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            key: const Key('reader-tool-notes'),
+                            value: _ReaderMoreAction.notes,
+                            child: const Row(
+                              children: [
+                                Icon(Icons.notes_outlined, size: 20),
+                                SizedBox(width: 12),
+                                Text('本书笔记'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            key: const Key('reader-tool-theme'),
+                            value: _ReaderMoreAction.theme,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  dark
+                                      ? Icons.light_mode_outlined
+                                      : Icons.dark_mode_outlined,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 12),
+                                Text(dark ? '切换到日间' : '切换到夜间'),
+                              ],
+                            ),
+                          ),
+                        ],
+                        onSelected: (action) {
+                          switch (action) {
+                            case _ReaderMoreAction.search:
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) unawaited(_showSearch());
+                              });
+                            case _ReaderMoreAction.notes:
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) _openNotes(book);
+                              });
+                            case _ReaderMoreAction.theme:
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) unawaited(_toggleTheme());
+                              });
+                          }
+                        },
                       ),
                       const SizedBox(width: 8),
                     ]
@@ -1516,24 +1573,6 @@ class _ReaderScreenState extends State<ReaderScreen>
                                               : ink,
                                           size: 22,
                                         ),
-                                      ),
-                                    ),
-                                    IconButton(
-                                      key: const Key('reader-theme-toggle'),
-                                      tooltip: dark ? '切换到日间' : '切换到夜间',
-                                      visualDensity: barCompact
-                                          ? VisualDensity.compact
-                                          : null,
-                                      padding: barCompact
-                                          ? EdgeInsets.zero
-                                          : null,
-                                      onPressed: _loading ? null : _toggleTheme,
-                                      icon: Icon(
-                                        dark
-                                            ? Icons.light_mode_outlined
-                                            : Icons.dark_mode_outlined,
-                                        color: ink,
-                                        size: 22,
                                       ),
                                     ),
                                     KeyedSubtree(
