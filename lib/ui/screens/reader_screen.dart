@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/book.dart';
@@ -14,7 +15,10 @@ import '../../services/book_text_rules.dart';
 import '../../services/book_text_search.dart';
 import '../../services/read_aloud.dart';
 import '../components/common.dart';
+import '../components/design.dart';
+import '../design_icons.dart';
 import '../components/note_composer.dart';
+import '../components/reader_cache_sheet.dart';
 import '../components/reader_mark_sheet.dart';
 import '../components/reader_marks_sheet.dart';
 import '../components/reader_preferences.dart';
@@ -26,14 +30,21 @@ import '../reader/reader_paginator.dart';
 import '../reader/reader_palette.dart';
 import '../reader/reader_paragraph.dart';
 import '../theme.dart';
+import 'audio_screen.dart';
+import 'finish_screen.dart';
 import 'notes_screen.dart';
 
-/// Vertical rhythm shared by the paged and scrolling readers. The paginator
-/// measures against these, so a page never renders text it did not reserve room for.
-const double _pagedTopPadding = 4;
+/// 沉浸态 `.reader-head` 固定高度（与 CSS 一致）。
+const double _immersiveHeadHeight = 36;
 
-/// 页脚叠在正文之上，正文底部要为它留出高度，最后一行才不会被压住。
-const double _pagedBottomPadding = 44;
+/// 工具顶栏 `.reader-tool-top` 大致占用（含少量内边距）。
+const double _toolTopHeight = 48;
+
+/// 沉浸页脚 + 底边距（10px 字高 + 29px 边距）。
+const double _immersiveFooterReserve = 34;
+
+/// 底栏工具区叠层占用的大致高度（进度条 + 四宫格 + 内边距）。
+const double _toolBottomReserve = 168;
 
 /// Space between the chapter title and the first line of body text.
 const double _titleBodyGap = 16;
@@ -54,10 +65,6 @@ class ReaderScreen extends StatefulWidget {
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
-
-/// 工具顶栏「更多」菜单里的动作；设计稿的 reader-more sheet 在这里收敛成一个
-/// PopupMenu：搜索、笔记与主题切换不再占据顶栏的一排图标位。
-enum _ReaderMoreAction { search, notes, theme }
 
 class _ReaderScreenState extends State<ReaderScreen>
     with WidgetsBindingObserver {
@@ -243,10 +250,10 @@ class _ReaderScreenState extends State<ReaderScreen>
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: AppColors.background,
+      backgroundColor: _readerSheetColor,
       constraints: const BoxConstraints(maxWidth: 600),
       builder: (_) => Theme(
-        data: appTheme(),
+        data: _readerSheetTheme(),
         child: ReaderMarkSheet(
           paragraph: preview,
           mark: existing,
@@ -298,10 +305,10 @@ class _ReaderScreenState extends State<ReaderScreen>
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: AppColors.background,
+      backgroundColor: _readerSheetColor,
       constraints: const BoxConstraints(maxWidth: 600),
       builder: (_) => Theme(
-        data: appTheme(),
+        data: _readerSheetTheme(),
         child: ReaderMarkSheet(
           paragraph: selected.text,
           isSelectedText: true,
@@ -334,10 +341,10 @@ class _ReaderScreenState extends State<ReaderScreen>
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: AppColors.background,
+      backgroundColor: _readerSheetColor,
       constraints: const BoxConstraints(maxWidth: 600),
       builder: (sheetContext) => Theme(
-        data: appTheme(),
+        data: _readerSheetTheme(),
         child: ReaderMarksSheet(
           controller: controller,
           bookId: widget.bookId,
@@ -601,8 +608,45 @@ class _ReaderScreenState extends State<ReaderScreen>
       } catch (_) {
         // Reading completion remains saved even if optional local history fails.
       }
-      if (mounted) showMessage(context, '又读完一本，下一本见。');
+      if (!mounted) return;
+      final finishedBook = book;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => FinishScreen(
+            controller: controller,
+            book: finishedBook,
+            onShelf: () {
+              Navigator.of(context).popUntil((route) => route.isFirst);
+            },
+            onOpenNote: (note) {
+              Navigator.of(context).pop();
+              unawaited(_jump(note.chapterIndex, note.paragraphIndex));
+            },
+          ),
+        ),
+      );
     }
+  }
+
+  void _openAudio() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AudioScreen(
+          controller: controller,
+          book: book,
+          chapterIndex: _chapterIndex,
+          readAloud: _readAloud,
+          onChapterChanged: (index) {
+            Navigator.of(context).pop();
+            unawaited(_jump(index));
+          },
+          onOpenToc: () {
+            Navigator.of(context).pop();
+            _showToc();
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _jump(int chapterIndex, [int paragraph = 0]) async {
@@ -695,20 +739,23 @@ class _ReaderScreenState extends State<ReaderScreen>
     onPointerCancel: (event) {
       if (event.pointer == _scrollTapPointer) _clearScrollTap();
     },
-    child: SingleChildScrollView(
-      key: const Key('reader-scrolling-view'),
-      controller: _scroll,
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 760),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              width < 650 ? 24 : 48,
-              36,
-              width < 650 ? 24 : 48,
-              104,
-            ),
+    child: Builder(
+      builder: (context) {
+        final insets = _readerContentInsets(context, width);
+        return SingleChildScrollView(
+          key: const Key('reader-scrolling-view'),
+          controller: _scroll,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  insets.horizontal,
+                  insets.top,
+                  insets.horizontal,
+                  insets.bottom + 56,
+                ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -775,6 +822,8 @@ class _ReaderScreenState extends State<ReaderScreen>
           ),
         ),
       ),
+        );
+      },
     ),
   );
 
@@ -791,6 +840,27 @@ class _ReaderScreenState extends State<ReaderScreen>
     await pages.animateToPage(
       target,
       duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// 进度滑条跳到本章第 [contentPage] 页（从 0 起）。
+  Future<void> _goToPage(int contentPage) async {
+    final pages = _pageController;
+    final layout = _pageLayout;
+    if (_loading ||
+        _restoring ||
+        pages == null ||
+        layout == null ||
+        !pages.hasClients) {
+      return;
+    }
+    final target = contentPage.clamp(0, layout.pages.length - 1);
+    if (_visiblePage == target) return;
+    final leading = _chapterIndex > 0 ? 1 : 0;
+    await pages.animateToPage(
+      leading + target,
+      duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
     );
   }
@@ -829,7 +899,7 @@ class _ReaderScreenState extends State<ReaderScreen>
                   ListTile(
                     key: const Key('reader-auto-read-stop'),
                     contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.pause_circle_outline),
+                    leading: const Icon(DesignIcons.pause),
                     title: const Text('停止自动翻页'),
                     onTap: () {
                       _stopAutoRead();
@@ -841,7 +911,7 @@ class _ReaderScreenState extends State<ReaderScreen>
                     ListTile(
                       key: Key('reader-auto-read-$seconds'),
                       contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.auto_mode_outlined),
+                      leading: const Icon(DesignIcons.timer),
                       title: Text('$seconds 秒 / 页'),
                       onTap: () {
                         _startAutoRead(seconds);
@@ -852,64 +922,6 @@ class _ReaderScreenState extends State<ReaderScreen>
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  void _showReadAloudControls() {
-    final raw = _chapter;
-    final chapter = raw == null ? null : _forDisplay(raw);
-    final paragraph = chapter == null || chapter.paragraphs.isEmpty
-        ? 0
-        : _visibleParagraph().clamp(0, chapter.paragraphs.length - 1).toInt();
-    final text = chapter == null
-        ? ''
-        : ReadAloudText.fromParagraphs(chapter.paragraphs.skip(paragraph));
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AnimatedBuilder(
-        animation: _readAloud,
-        builder: (context, _) {
-          final state = _readAloud.state;
-          final detail = !_readAloud.isSupported
-              ? '当前平台不支持本机朗读。'
-              : switch (state) {
-                  ReadAloudState.unavailable => '当前平台不支持本机朗读。',
-                  ReadAloudState.error => '设备无法启动本机朗读，请确认已安装中文系统语音。',
-                  ReadAloudState.speaking => '正在朗读当前章节的本地文本。',
-                  ReadAloudState.idle when text.isEmpty => '当前位置没有可朗读的正文。',
-                  ReadAloudState.idle =>
-                    '从当前段落开始，单次最多朗读 ${ReadAloudText.maxCharacters} 个字符。应用不会上传正文；请在系统中选择已安装的本地中文语音。',
-                };
-          return AlertDialog(
-            title: const Text('设备朗读'),
-            content: Text(detail, style: const TextStyle(height: 1.7)),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('关闭'),
-              ),
-              if (_readAloud.isSpeaking)
-                FilledButton(
-                  key: const Key('reader-read-aloud-stop'),
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                    unawaited(_readAloud.stop());
-                  },
-                  child: const Text('停止朗读'),
-                )
-              else if (_readAloud.isSupported && text.isNotEmpty)
-                FilledButton(
-                  key: const Key('reader-read-aloud-start'),
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                    unawaited(_readAloud.start(text));
-                  },
-                  child: const Text('从当前位置朗读'),
-                ),
-            ],
-          );
-        },
       ),
     );
   }
@@ -965,7 +977,373 @@ class _ReaderScreenState extends State<ReaderScreen>
     await _turnPage(1, itemCount);
   }
 
-  void _toggleChrome() => setState(() => _chromeVisible = !_chromeVisible);
+  void _toggleChrome() => setState(() {
+    _chromeVisible = !_chromeVisible;
+    _pageLayoutKey = null;
+  });
+
+  /// 设计稿 `reader-footer` 右侧：`进度% · 页/总页`；顶部已有章名时不重复展示。
+  double _liveReadingProgress(ReaderSettings settings) {
+    final chapters = book.chapters.length;
+    if (chapters == 0) return book.progress;
+    if (book.finished) return 1;
+    final inChapter = settings.flow == ReaderFlow.paged &&
+            !_pagedFallback &&
+            _pageLayout != null
+        ? (_visiblePage + 1) / math.max(1, _pageLayout!.pages.length)
+        : () {
+            final count = _chapter?.paragraphs.length ?? 0;
+            if (count == 0) return 0.0;
+            return _visibleParagraph() / count;
+          }();
+    return ((_chapterIndex + inChapter.clamp(0, 1)) / chapters).clamp(0, 1);
+  }
+
+  /// 浮层不占 AppBar 后，分页必须按顶/底叠层预留高度，否则会与正文抢同一行。
+  ({double top, double bottom, double horizontal}) _readerContentInsets(
+    BuildContext context,
+    double width,
+  ) {
+    final safe = MediaQuery.paddingOf(context);
+    final horizontal = width < 650 ? 29.0 : 48.0;
+    if (_chromeVisible) {
+      return (
+        top: safe.top + _toolTopHeight,
+        bottom: safe.bottom + _toolBottomReserve,
+        horizontal: horizontal,
+      );
+    }
+    return (
+      top: safe.top + _immersiveHeadHeight,
+      bottom: safe.bottom + _immersiveFooterReserve,
+      horizontal: horizontal,
+    );
+  }
+
+  String _immersiveFooterLabel(ReaderSettings settings) {
+    final percent = (_liveReadingProgress(settings) * 100).round();
+    if (settings.flow == ReaderFlow.paged && !_pagedFallback) {
+      final pages = math.max(1, _pageLayout?.pages.length ?? 1);
+      final page = (_visiblePage + 1).clamp(1, pages);
+      return '$percent% · $page/$pages';
+    }
+    return '$percent% · 滚动';
+  }
+
+  Color get _readerSheetColor =>
+      ReaderPalette.of(controller.settings.theme).background;
+
+  /// 阅读弹层跟当前阅读底色走，图标和文字用同一套墨色。
+  ThemeData _readerSheetTheme() {
+    final palette = ReaderPalette.of(controller.settings.theme);
+    final base = appTheme();
+    return base.copyWith(
+      scaffoldBackgroundColor: palette.background,
+      iconTheme: IconThemeData(color: palette.ink),
+      dividerTheme: DividerThemeData(
+        color: palette.ink.withValues(alpha: .12),
+        space: 1,
+      ),
+      listTileTheme: ListTileThemeData(
+        iconColor: palette.ink,
+        textColor: palette.ink,
+        subtitleTextStyle: TextStyle(color: palette.muted, fontSize: 12),
+      ),
+      textTheme: base.textTheme.apply(
+        bodyColor: palette.ink,
+        displayColor: palette.ink,
+      ),
+      extensions: <ThemeExtension<dynamic>>[
+        ChromeColors(
+          ink: palette.ink,
+          muted: palette.muted,
+          surface: palette.background,
+        ),
+      ],
+    );
+  }
+
+  /// 设计稿 `reader-more`：离线/换源/搜索/笔记/读完等；自动翻页与标注等不在「阅读设置」里。
+  List<Widget> _readerAuxiliaryToolRows(BuildContext sheetContext) => [
+        const SectionLabel('辅助能力'),
+        ListTile(
+          key: const Key('reader-auto-read'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('自动翻页'),
+          subtitle: Text(
+            _autoReadActive ? '当前每 ${_autoReadSeconds!} 秒翻一页' : '仅支持分页阅读',
+          ),
+          trailing: Icon(
+            _autoReadActive
+                ? DesignIcons.pause
+                : DesignIcons.timer,
+          ),
+          enabled: _autoReadActive || _canStartAutoRead,
+          onTap: _autoReadActive || _canStartAutoRead
+              ? () {
+                  Navigator.pop(sheetContext);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _showAutoReadControls();
+                  });
+                }
+              : null,
+        ),
+        ListTile(
+          key: const Key('reader-read-aloud'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('设备朗读'),
+          subtitle: Text(
+            _readAloud.isSpeaking
+                ? '正在朗读当前章节'
+                : (_readAloud.isSupported
+                      ? '使用设备已安装的中文语音'
+                      : '仅 Android 设备可用'),
+          ),
+          trailing: Icon(
+            _readAloud.isSpeaking
+                ? DesignIcons.stopCircle
+                : DesignIcons.volume,
+          ),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _openAudio();
+            });
+          },
+        ),
+        ListTile(
+          key: const Key('reader-mark'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('段落标注'),
+          subtitle: const Text('标注当前显示段落，可添加本地备注'),
+          trailing: const Icon(DesignIcons.highlighter),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _showMarkSheet();
+            });
+          },
+        ),
+        ListTile(
+          key: const Key('reader-selected-text-mark'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('选中文字标注'),
+          subtitle: Text(
+            _hasActiveDisplayRules
+                ? '正文显示替换启用时不可使用'
+                : controller.settings.flow != ReaderFlow.scrolling
+                ? '切换到上下滚动后可选择文字'
+                : _canMarkSelectedText
+                ? '已选择唯一文字片段'
+                : '长按并拖动选择当前段落文字',
+          ),
+          trailing: const Icon(DesignIcons.type),
+          enabled: _canMarkSelectedText,
+          onTap: !_canMarkSelectedText
+              ? null
+              : () {
+                  Navigator.pop(sheetContext);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _showSelectedTextMarkSheet();
+                  });
+                },
+        ),
+        ListTile(
+          key: const Key('reader-selected-explain'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('解释这段文字'),
+          subtitle: Text(
+            _canExplainSelection
+                ? '用本机已读内容回顾这一段，不连接模型'
+                : controller.settings.flow != ReaderFlow.scrolling
+                ? '切换到上下滚动后可选择文字'
+                : '长按并拖动选择当前段落文字',
+          ),
+          trailing: const Icon(DesignIcons.sparkles),
+          enabled: _canExplainSelection,
+          onTap: !_canExplainSelection
+              ? null
+              : () {
+                  Navigator.pop(sheetContext);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _openSelectionAssistant();
+                  });
+                },
+        ),
+        ListTile(
+          key: const Key('reader-mark-manager'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('段落标注管理'),
+          subtitle: Text(
+            '本书已保存 ${controller.readerMarks(widget.bookId).length} 条本地标注',
+          ),
+          trailing: const Icon(DesignIcons.bookmark),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) unawaited(_showMarkManager());
+            });
+          },
+        ),
+      ];
+
+  void _showReaderMoreSheet() {
+    final dark = ReaderPalette.of(controller.settings.theme).isDark;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: _readerSheetColor,
+      constraints: const BoxConstraints(maxWidth: 600),
+      builder: (sheetContext) => Theme(
+        data: _readerSheetTheme(),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 4, 0, 14),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '阅读工具',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: ReaderPalette.of(
+                            controller.settings.theme,
+                          ).ink,
+                        ),
+                      ),
+                    ),
+                    CircleIconButton(
+                      icon: DesignIcons.close,
+                      tooltip: '关闭',
+                      onPressed: () => Navigator.pop(sheetContext),
+                    ),
+                  ],
+                ),
+              ),
+              if (book.isRemote)
+                ListRow(
+                  icon: DesignIcons.sheetDownload,
+                  title: '离线阅读',
+                  subtitle: '下载后，没有网络也能读',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      showModalBottomSheet<void>(
+                        context: context,
+                        isScrollControlled: true,
+                        showDragHandle: true,
+                        backgroundColor: _readerSheetColor,
+                        constraints: const BoxConstraints(maxWidth: 600),
+                        builder: (_) => Theme(
+                          data: _readerSheetTheme(),
+                          child: ReaderCacheSheet(
+                            controller: controller,
+                            book: book,
+                          ),
+                        ),
+                      );
+                    });
+                  },
+                ),
+              if (book.isRemote)
+                ListRow(
+                  icon: DesignIcons.toolSource,
+                  title: '更换来源',
+                  subtitle: '保留进度，重新匹配章节',
+                  onTap: _loading
+                      ? null
+                      : () {
+                          Navigator.pop(sheetContext);
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (mounted) unawaited(_changeSource());
+                          });
+                        },
+                ),
+              KeyedSubtree(
+                key: const Key('reader-search'),
+                child: ListRow(
+                  icon: DesignIcons.sheetSearch,
+                  title: '搜索已下载内容',
+                  onTap: _chapter == null
+                      ? null
+                      : () {
+                          Navigator.pop(sheetContext);
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (mounted) unawaited(_showSearch());
+                          });
+                        },
+                ),
+              ),
+              KeyedSubtree(
+                key: const Key('reader-tool-notes'),
+                child: ListRow(
+                  icon: DesignIcons.toolNotes,
+                  title: '读书笔记',
+                  subtitle: '查看本书的想法与划线',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _openNotes(book);
+                    });
+                  },
+                ),
+              ),
+              ListRow(
+                icon: DesignIcons.selectionHighlight,
+                title: '选择文字与写笔记',
+                subtitle: controller.settings.flow == ReaderFlow.scrolling
+                    ? null
+                    : '切换到上下滚动后可选择文字',
+                onTap: controller.settings.flow == ReaderFlow.scrolling
+                    ? () {
+                        Navigator.pop(sheetContext);
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) showMessage(context, '长按正文选择文字。');
+                        });
+                      }
+                    : null,
+              ),
+              ListRow(
+                icon: DesignIcons.sheetMarkDone,
+                title: '标记为已读完',
+                onTap: book.finished
+                    ? null
+                    : () {
+                        Navigator.pop(sheetContext);
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) unawaited(_markFinished());
+                        });
+                      },
+              ),
+              KeyedSubtree(
+                key: const Key('reader-tool-theme'),
+                child: ListRow(
+                  icon: dark
+                      ? DesignIcons.sun
+                      : DesignIcons.moon,
+                  title: dark ? '切换到日间' : '切换到夜间',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) unawaited(_toggleTheme());
+                    });
+                  },
+                ),
+              ),
+              ..._readerAuxiliaryToolRows(sheetContext),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   Future<void> _toggleTheme() async {
     final currentTheme = controller.settings.theme;
@@ -989,7 +1367,8 @@ class _ReaderScreenState extends State<ReaderScreen>
     required Color muted,
   }) => LayoutBuilder(
     builder: (context, constraints) {
-      final horizontalPadding = constraints.maxWidth < 650 ? 24.0 : 48.0;
+      final insets = _readerContentInsets(context, constraints.maxWidth);
+      final horizontalPadding = insets.horizontal;
       final contentWidth = math.max(
         1.0,
         math.min(760.0, constraints.maxWidth) - horizontalPadding * 2,
@@ -997,7 +1376,7 @@ class _ReaderScreenState extends State<ReaderScreen>
 
       final contentHeight = math.max(
         1.0,
-        constraints.maxHeight - _pagedTopPadding - _pagedBottomPadding,
+        constraints.maxHeight - insets.top - insets.bottom,
       );
       final bodyStyle = TextStyle(
         inherit: false,
@@ -1041,9 +1420,10 @@ class _ReaderScreenState extends State<ReaderScreen>
       if (_pagedFallback) _pageLayoutKey = null;
       _pagedFallback = false;
       final layoutKey =
-          '${chapter.id}|$_displayRulesRevision|${contentWidth.toStringAsFixed(1)}|'
-          '${contentHeight.toStringAsFixed(1)}|${settings.fontSize}|'
-          '${settings.lineHeight}|${settings.paragraphSpacing}|${settings.boldText}';
+          '${chapter.id}|$_displayRulesRevision|$_chromeVisible|'
+          '${contentWidth.toStringAsFixed(1)}|${contentHeight.toStringAsFixed(1)}|'
+          '${settings.fontSize}|${settings.lineHeight}|'
+          '${settings.paragraphSpacing}|${settings.boldText}';
       if (_pageLayoutKey != layoutKey || _pageLayout == null) {
         final layout = ReaderPaginator.paginate(
           title: chapter.title,
@@ -1123,9 +1503,9 @@ class _ReaderScreenState extends State<ReaderScreen>
                       child: Padding(
                         padding: EdgeInsets.fromLTRB(
                           horizontalPadding,
-                          _pagedTopPadding,
+                          insets.top,
                           horizontalPadding,
-                          _pagedBottomPadding,
+                          insets.bottom,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1195,16 +1575,12 @@ class _ReaderScreenState extends State<ReaderScreen>
               );
             },
           ),
-          if (_chromeVisible)
-            Positioned(
-              right: 16,
-              bottom: 8,
-              child: Text(
-                '${_visiblePage + 1}/${layout.pages.length}',
-                key: const Key('reader-page-indicator'),
-                style: TextStyle(fontSize: 11, color: muted),
-              ),
+          Offstage(
+            child: Text(
+              '${_visiblePage + 1}/${layout.pages.length}',
+              key: const Key('reader-page-indicator'),
             ),
+          ),
         ],
       );
     },
@@ -1230,9 +1606,6 @@ class _ReaderScreenState extends State<ReaderScreen>
       final background = palette.background;
       final ink = palette.ink;
       final muted = palette.muted;
-      final compactControls =
-          MediaQuery.sizeOf(context).width < 480 ||
-          MediaQuery.textScalerOf(context).scale(12) > 18;
       return PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, result) {
@@ -1245,132 +1618,6 @@ class _ReaderScreenState extends State<ReaderScreen>
           ),
           child: Scaffold(
             backgroundColor: background,
-            appBar: AppBar(
-              backgroundColor: background,
-              foregroundColor: ink,
-              elevation: 0,
-              scrolledUnderElevation: 0,
-              centerTitle: false,
-              automaticallyImplyLeading: false,
-              titleSpacing: _chromeVisible ? 16 : 24,
-              leading: _chromeVisible
-                  ? IconButton(
-                      key: const Key('reader-back'),
-                      tooltip: '返回书架',
-                      onPressed: _leave,
-                      icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-                    )
-                  : null,
-              title: _chromeVisible
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        KeyedSubtree(
-                          key: const Key('reader-head-title'),
-                          child: Text(
-                            book.title,
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: ink,
-                            ),
-                          ),
-                        ),
-                        KeyedSubtree(
-                          key: const Key('reader-head-chapter'),
-                          child: Text(
-                            '${book.author} · ${_chapterIndex + 1}/${book.chapters.length} 章',
-                            style: TextStyle(fontSize: 11, color: muted),
-                          ),
-                        ),
-                      ],
-                    )
-                  : Text(
-                      _chapter?.title ?? book.title,
-                      key: const Key('reader-compact-heading'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: muted),
-                    ),
-              actions: _chromeVisible
-                  ? [
-                      // 工具顶栏按设计稿只留三件事：返回（leading）、书签、更多。
-                      // 搜索、笔记与更多操作收进 reader-more 菜单。
-                      IconButton(
-                        key: const Key('reader-bookmark'),
-                        tooltip: '添加书签笔记',
-                        onPressed: _chapter == null || bindingChanged
-                            ? null
-                            : _addNote,
-                        icon: const Icon(Icons.bookmark_add_outlined, size: 23),
-                      ),
-                      PopupMenuButton<_ReaderMoreAction>(
-                        key: const Key('reader-more'),
-                        tooltip: '阅读更多操作',
-                        icon: const Icon(Icons.more_horiz, size: 23),
-                        color: Colors.white,
-                        itemBuilder: (menuContext) => [
-                          PopupMenuItem(
-                            key: const Key('reader-search'),
-                            value: _ReaderMoreAction.search,
-                            enabled: _chapter != null && !bindingChanged,
-                            child: const Row(
-                              children: [
-                                Icon(Icons.search, size: 20),
-                                SizedBox(width: 12),
-                                Text('书内查找'),
-                              ],
-                            ),
-                          ),
-                          PopupMenuItem(
-                            key: const Key('reader-tool-notes'),
-                            value: _ReaderMoreAction.notes,
-                            child: const Row(
-                              children: [
-                                Icon(Icons.notes_outlined, size: 20),
-                                SizedBox(width: 12),
-                                Text('本书笔记'),
-                              ],
-                            ),
-                          ),
-                          PopupMenuItem(
-                            key: const Key('reader-tool-theme'),
-                            value: _ReaderMoreAction.theme,
-                            child: Row(
-                              children: [
-                                Icon(
-                                  dark
-                                      ? Icons.light_mode_outlined
-                                      : Icons.dark_mode_outlined,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 12),
-                                Text(dark ? '切换到日间' : '切换到夜间'),
-                              ],
-                            ),
-                          ),
-                        ],
-                        onSelected: (action) {
-                          switch (action) {
-                            case _ReaderMoreAction.search:
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                if (mounted) unawaited(_showSearch());
-                              });
-                            case _ReaderMoreAction.notes:
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                if (mounted) _openNotes(book);
-                              });
-                            case _ReaderMoreAction.theme:
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                if (mounted) unawaited(_toggleTheme());
-                              });
-                          }
-                        },
-                      ),
-                      const SizedBox(width: 8),
-                    ]
-                  : const [],
-            ),
             body: LayoutBuilder(
               builder: (context, constraints) {
                 final rulesChanged =
@@ -1403,292 +1650,536 @@ class _ReaderScreenState extends State<ReaderScreen>
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          Icon(
+                            DesignIcons.cloudOff,
+                            size: 36,
+                            color: muted,
+                          ),
+                          const SizedBox(height: 16),
                           Text(
-                            _error!,
-                            style: TextStyle(color: ink),
+                            '这一章，暂时没有加载出来',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              color: ink,
+                            ),
                             textAlign: TextAlign.center,
                           ),
-                          const SizedBox(height: 20),
-                          OutlinedButton(
+                          const SizedBox(height: 10),
+                          Text(
+                            _error!,
+                            style: TextStyle(color: muted, height: 1.6),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '阅读进度已为你保留。',
+                            style: TextStyle(fontSize: 12, color: muted),
+                          ),
+                          const SizedBox(height: 22),
+                          FilledButton(
+                            key: const Key('reader-error-retry'),
                             onPressed: () =>
                                 _load(_chapterIndex, _requestedParagraphIndex),
                             child: const Text('重新加载'),
                           ),
+                          if (book.isRemote)
+                            TextButton(
+                              key: const Key('reader-error-change-source'),
+                              onPressed: _changeSource,
+                              child: const Text('换个来源试试'),
+                            ),
                         ],
                       ),
                     ),
                   );
                 }
                 final chapter = _forDisplay(_chapter!);
-                return Column(
+                // 工具栏用叠层浮在正文之上：高度变化不会改分页可用高度。
+                return Stack(
                   children: [
-                    if (_saveError != null)
-                      Container(
-                        width: double.infinity,
-                        color: palette.errorBackground,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
+                    Column(
+                      children: [
+                        if (_saveError != null)
+                          Container(
+                            width: double.infinity,
+                            color: palette.errorBackground,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 10,
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    _saveError!,
+                                    style: TextStyle(
+                                      color: palette.errorInk,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                                TextButton(
+                                  key: const Key('reader-save-retry'),
+                                  onPressed: _retrySave,
+                                  child: const Text('重试保存'),
+                                ),
+                                TextButton(
+                                  key: const Key('reader-discard-progress'),
+                                  onPressed: _discardAndLeave,
+                                  child: const Text('不保存退出'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        Expanded(
+                          child: settings.flow == ReaderFlow.scrolling
+                              ? _buildScrollingChapter(
+                                  width: constraints.maxWidth,
+                                  chapter: chapter,
+                                  settings: settings,
+                                  ink: ink,
+                                  muted: muted,
+                                )
+                              : _buildPagedChapter(
+                                  chapter: chapter,
+                                  settings: settings,
+                                  ink: ink,
+                                  muted: muted,
+                                ),
                         ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                _saveError!,
-                                style: TextStyle(
-                                  color: palette.errorInk,
-                                  fontSize: 12,
+                      ],
+                    ),
+                    if (_chromeVisible)
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _readerToolTop(
+                          background: background,
+                          ink: ink,
+                          bindingChanged: bindingChanged,
+                        ),
+                      )
+                    else
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _readerImmersiveHead(
+                          book: book,
+                          muted: muted,
+                        ),
+                      ),
+                    if (!_chromeVisible)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: SafeArea(
+                          top: false,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(29, 0, 29, 29),
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: KeyedSubtree(
+                                key: const Key('reader-footer-progress'),
+                                child: Text(
+                                  _immersiveFooterLabel(settings),
+                                  key: const Key('reader-reading-progress'),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.right,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: muted,
+                                  ),
                                 ),
                               ),
                             ),
-                            TextButton(
-                              key: const Key('reader-save-retry'),
-                              onPressed: _retrySave,
-                              child: const Text('重试保存'),
-                            ),
-                            TextButton(
-                              key: const Key('reader-discard-progress'),
-                              onPressed: _discardAndLeave,
-                              child: const Text('不保存退出'),
-                            ),
-                          ],
+                          ),
                         ),
                       ),
-                    Expanded(
-                      child: settings.flow == ReaderFlow.scrolling
-                          ? _buildScrollingChapter(
-                              width: constraints.maxWidth,
-                              chapter: chapter,
-                              settings: settings,
-                              ink: ink,
-                              muted: muted,
-                            )
-                          : _buildPagedChapter(
-                              chapter: chapter,
-                              settings: settings,
-                              ink: ink,
-                              muted: muted,
-                            ),
-                    ),
+                    if (_chromeVisible)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: _readerToolChrome(
+                          book: book,
+                          settings: settings,
+                          background: background,
+                          ink: ink,
+                          muted: muted,
+                          nextDisabled: nextDisabled,
+                        ),
+                      ),
+                    if (_selectedText != null)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: _chromeVisible ? 148 : 56,
+                        child: _selectionActionBar(
+                          ink: ink,
+                          muted: muted,
+                          background: background,
+                        ),
+                      ),
                   ],
                 );
               },
-            ),
-            bottomNavigationBar: SafeArea(
-              top: false,
-              child: Container(
-                color: background,
-                // 高度必须与工具栏显隐无关：底栏一变高就会改动正文可用高度，
-                // 触发重新分页并把读者从当前页弹走。
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                child: SizedBox(
-                  height: 48,
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 760),
-                      child: LayoutBuilder(
-                        builder: (context, barConstraints) {
-                          // 按底栏的真实可用宽度决定按钮形态，而不是只看屏宽：
-                          // 文字按钮（上一章/下一章）各占 84pt，加上换源等四个
-                          // 图标在 360pt 级别的宽度上会横向溢出。
-                          final barCompact =
-                              compactControls || barConstraints.maxWidth < 420;
-                          return Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: _chromeVisible
-                                ? [
-                                    Tooltip(
-                                      message: '上一章',
-                                      child: TextButton(
-                                        onPressed:
-                                            _loading || _chapterIndex == 0
-                                            ? null
-                                            : () => _jump(_chapterIndex - 1),
-                                        child: barCompact
-                                            ? Icon(
-                                                Icons.skip_previous,
-                                                size: 22,
-                                                color:
-                                                    _loading ||
-                                                        _chapterIndex == 0
-                                                    ? muted.withValues(
-                                                        alpha: .5,
-                                                      )
-                                                    : ink,
-                                              )
-                                            : Text(
-                                                '‹ 上一章',
-                                                style: TextStyle(
-                                                  color:
-                                                      _loading ||
-                                                          _chapterIndex == 0
-                                                      ? muted.withValues(
-                                                          alpha: .5,
-                                                        )
-                                                      : ink,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                      ),
-                                    ),
-                                    KeyedSubtree(
-                                      key: const Key('reader-tool-toc'),
-                                      child: IconButton(
-                                        tooltip: '章节目录',
-                                        visualDensity: barCompact
-                                            ? VisualDensity.compact
-                                            : null,
-                                        padding: barCompact
-                                            ? EdgeInsets.zero
-                                            : null,
-                                        onPressed: _showToc,
-                                        icon: Icon(
-                                          Icons.format_list_bulleted,
-                                          color: ink,
-                                          size: 22,
-                                        ),
-                                      ),
-                                    ),
-                                    KeyedSubtree(
-                                      key: const Key('reader-tool-source'),
-                                      child: IconButton(
-                                        key: const Key('reader-change-source'),
-                                        tooltip: '换源',
-                                        visualDensity: barCompact
-                                            ? VisualDensity.compact
-                                            : null,
-                                        padding: barCompact
-                                            ? EdgeInsets.zero
-                                            : null,
-                                        onPressed: _loading || !book.isRemote
-                                            ? null
-                                            : _changeSource,
-                                        icon: Icon(
-                                          Icons.swap_horiz,
-                                          color: _loading || !book.isRemote
-                                              ? muted.withValues(alpha: .5)
-                                              : ink,
-                                          size: 22,
-                                        ),
-                                      ),
-                                    ),
-                                    KeyedSubtree(
-                                      key: const Key('reader-tool-settings'),
-                                      child: IconButton(
-                                        key: const Key('reader-settings'),
-                                        tooltip: '阅读设置',
-                                        onPressed: _showSettings,
-                                        icon: Icon(
-                                          Icons.text_fields,
-                                          color: ink,
-                                          size: 24,
-                                        ),
-                                      ),
-                                    ),
-                                    Tooltip(
-                                      message:
-                                          _chapterIndex + 1 <
-                                              book.chapters.length
-                                          ? '下一章'
-                                          : (book.finished ? '已读完' : '标记读完'),
-                                      child: TextButton(
-                                        key: const Key('reader-next'),
-                                        onPressed: nextDisabled
-                                            ? null
-                                            : () async {
-                                                if (_chapterIndex + 1 <
-                                                    book.chapters.length) {
-                                                  await _jump(
-                                                    _chapterIndex + 1,
-                                                  );
-                                                } else {
-                                                  await _markFinished();
-                                                }
-                                              },
-                                        child: barCompact
-                                            ? Icon(
-                                                _chapterIndex + 1 <
-                                                        book.chapters.length
-                                                    ? Icons.skip_next
-                                                    : Icons
-                                                          .check_circle_outline,
-                                                size: 22,
-                                                color: nextDisabled
-                                                    ? muted.withValues(
-                                                        alpha: .5,
-                                                      )
-                                                    : ink,
-                                              )
-                                            : Text(
-                                                _chapterIndex + 1 <
-                                                        book.chapters.length
-                                                    ? '下一章 ›'
-                                                    : (book.finished
-                                                          ? '已读完 ✓'
-                                                          : '标记读完'),
-                                                style: TextStyle(
-                                                  color: ink,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                      ),
-                                    ),
-                                  ]
-                                : [
-                                    Expanded(
-                                      child: KeyedSubtree(
-                                        key: const Key('reader-footer-chapter'),
-                                        child: Text(
-                                          _chapter?.title ?? book.title,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: muted,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Flexible(
-                                      child: KeyedSubtree(
-                                        key: const Key(
-                                          'reader-footer-progress',
-                                        ),
-                                        child: Text(
-                                          settings.flow == ReaderFlow.paged &&
-                                                  !_pagedFallback
-                                              ? '第 ${_chapterIndex + 1} 章 · ${_visiblePage + 1}/${_pageLayout?.pages.length ?? 1} 页'
-                                              : '第 ${_chapterIndex + 1} 章 · 滚动阅读',
-                                          key: const Key(
-                                            'reader-reading-progress',
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: muted,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              ),
             ),
           ),
         ),
       );
     },
   );
+
+  /// 设计稿 `.reader-tool-top`：仅返回、书签与更多，不占用书名位。
+  Widget _readerToolTop({
+    required Color background,
+    required Color ink,
+    required bool bindingChanged,
+  }) {
+    final border = ink.withValues(alpha: .12);
+    return Material(
+      color: background.withValues(alpha: .97),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: border)),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+            child: Row(
+              children: [
+                CircleIconButton(
+                  key: const Key('reader-back'),
+                  icon: DesignIcons.readerBack,
+                  tooltip: '返回书架',
+                  onPressed: _leave,
+                ),
+                const Spacer(),
+                CircleIconButton(
+                  key: const Key('reader-bookmark'),
+                  icon: DesignIcons.readerBookmark,
+                  tooltip: '添加书签笔记',
+                  onPressed: _chapter == null || bindingChanged ? null : _addNote,
+                ),
+                const SizedBox(width: 4),
+                CircleIconButton(
+                  key: const Key('reader-more'),
+                  icon: DesignIcons.readerMore,
+                  tooltip: '阅读更多操作',
+                  onPressed: _showReaderMoreSheet,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 设计稿 `.reader-head`：章名在左，章序在右（10px，不重复底栏信息）。
+  Widget _readerImmersiveHead({required Book book, required Color muted}) =>
+      Material(
+        color: Colors.transparent,
+        child: SafeArea(
+          bottom: false,
+          child: SizedBox(
+            height: 36,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 29),
+              child: Row(
+                children: [
+                  Offstage(
+                    child: KeyedSubtree(
+                      key: const Key('reader-head-title'),
+                      child: Text(book.title),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      _chapter?.title ?? book.title,
+                      key: const Key('reader-compact-heading'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: muted,
+                        letterSpacing: .2,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  KeyedSubtree(
+                    key: const Key('reader-head-chapter'),
+                    child: Text(
+                      '${_chapterIndex + 1} / ${book.chapters.length}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: muted,
+                        letterSpacing: .2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+  /// 设计稿底栏：进度滑条 + 上一/下一 + 四等宽带文案工具。
+  Widget _readerToolChrome({
+    required Book book,
+    required ReaderSettings settings,
+    required Color background,
+    required Color ink,
+    required Color muted,
+    required bool nextDisabled,
+  }) {
+    final chapterTotal = math.max(1, book.chapters.length);
+    final pageTotal = math.max(1, _pageLayout?.pages.length ?? 1);
+    final usePages = settings.flow == ReaderFlow.paged && !_pagedFallback;
+    final progressMax = usePages
+        ? pageTotal.toDouble()
+        : chapterTotal.toDouble();
+    final progressValue = usePages
+        ? (_visiblePage + 1).clamp(1, pageTotal).toDouble()
+        : (_chapterIndex + 1).clamp(1, chapterTotal).toDouble();
+    // Design draft `.reader-tools`: 4 equal columns, icon above 10px label.
+    Widget tool({
+      required Key key,
+      required IconData icon,
+      required String label,
+      required VoidCallback? onPressed,
+    }) => Expanded(
+      child: InkWell(
+        key: key,
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 21,
+                color: onPressed == null ? muted.withValues(alpha: .45) : ink,
+              ),
+              const SizedBox(height: 9),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: onPressed == null ? muted.withValues(alpha: .45) : muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    final toolBorder = ink.withValues(alpha: .14);
+    return Material(
+      color: background.withValues(alpha: .97),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: toolBorder)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 34),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: _loading || _chapterIndex == 0
+                            ? null
+                            : () => _jump(_chapterIndex - 1),
+                        child: Text(
+                          '上一章',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: _loading || _chapterIndex == 0
+                                ? muted.withValues(alpha: .5)
+                                : ink,
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      child: Slider(
+                        key: const Key('reader-progress-slider'),
+                        min: 1,
+                        max: progressMax,
+                        divisions: progressMax > 1
+                            ? progressMax.round() - 1
+                            : null,
+                        value: progressValue,
+                        onChanged: _loading
+                            ? null
+                            : (value) {
+                                final next = value.round() - 1;
+                                if (usePages) {
+                                  unawaited(_goToPage(next));
+                                } else if (next != _chapterIndex) {
+                                  unawaited(_jump(next));
+                                }
+                              },
+                      ),
+                    ),
+                    TextButton(
+                      key: const Key('reader-next'),
+                      onPressed: nextDisabled
+                          ? null
+                          : () async {
+                              if (_chapterIndex + 1 < book.chapters.length) {
+                                await _jump(_chapterIndex + 1);
+                              } else {
+                                await _markFinished();
+                              }
+                            },
+                      child: Text(
+                        _chapterIndex + 1 < book.chapters.length
+                            ? '下一章'
+                            : (book.finished ? '已读完' : '标记读完'),
+                        style: TextStyle(fontSize: 11, color: ink),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    tool(
+                      key: const Key('reader-tool-toc'),
+                      icon: DesignIcons.toolToc,
+                      label: '目录',
+                      onPressed: _showToc,
+                    ),
+                    KeyedSubtree(
+                      key: const Key('reader-change-source'),
+                      child: tool(
+                        key: const Key('reader-tool-source'),
+                        icon: DesignIcons.toolSource,
+                        label: '换源',
+                        onPressed: _loading || !book.isRemote
+                            ? null
+                            : _changeSource,
+                      ),
+                    ),
+                    tool(
+                      key: const Key('reader-tool-notes'),
+                      icon: DesignIcons.toolNotes,
+                      label: '笔记',
+                      onPressed: () => _openNotes(book),
+                    ),
+                    KeyedSubtree(
+                      key: const Key('reader-settings'),
+                      child: tool(
+                        key: const Key('reader-tool-settings'),
+                        icon: DesignIcons.toolSettings,
+                        label: '设置',
+                        onPressed: _showSettings,
+                      ),
+                    ),
+                  ],
+                ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _selectionActionBar({
+    required Color ink,
+    required Color muted,
+    required Color background,
+  }) {
+    Future<void> copy() async {
+      final text = _selectedText?.text;
+      if (text == null) return;
+      await Clipboard.setData(ClipboardData(text: text));
+      if (mounted) showMessage(context, '已复制选中文字');
+    }
+
+    const menuInk = Colors.white;
+    const menuMuted = Color(0xBFFFFFFF);
+    TextStyle actionStyle(bool enabled) => TextStyle(
+      fontSize: 13,
+      color: enabled ? menuInk : menuMuted,
+    );
+    Widget action({
+      required Key key,
+      required String label,
+      required VoidCallback? onPressed,
+    }) => Expanded(
+      child: TextButton(
+        key: key,
+        style: TextButton.styleFrom(
+          foregroundColor: menuInk,
+          padding: const EdgeInsets.symmetric(vertical: 10),
+        ),
+        onPressed: onPressed,
+        child: Text(label, style: actionStyle(onPressed != null)),
+      ),
+    );
+    Widget divider() => Container(
+      width: 1,
+      height: 22,
+      color: Colors.white.withValues(alpha: .18),
+    );
+    return Material(
+      key: const Key('reader-selection-bar'),
+      color: const Color(0xFF363A40),
+      elevation: 8,
+      shadowColor: Colors.black26,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Row(
+          children: [
+            action(
+              key: const Key('reader-selected-mark'),
+              label: '划线',
+              onPressed:
+                  _canMarkSelectedText ? _showSelectedTextMarkSheet : null,
+            ),
+            divider(),
+            action(
+              key: const Key('reader-selected-note'),
+              label: '笔记',
+              onPressed:
+                  _canMarkSelectedText ? _showSelectedTextMarkSheet : null,
+            ),
+            divider(),
+            action(
+              key: const Key('reader-selection-explain'),
+              label: '解释',
+              onPressed: _canExplainSelection ? _openSelectionAssistant : null,
+            ),
+            divider(),
+            action(
+              key: const Key('reader-selected-copy'),
+              label: '复制',
+              onPressed: copy,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   void _openNotes(Book book) {
     Navigator.push(
@@ -1716,10 +2207,10 @@ class _ReaderScreenState extends State<ReaderScreen>
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: AppColors.background,
+      backgroundColor: _readerSheetColor,
       constraints: const BoxConstraints(maxWidth: 600),
       builder: (_) => Theme(
-        data: appTheme(),
+        data: _readerSheetTheme(),
         child: ReaderSearchSheet(
           book: start,
           displayRulesActive: displayRulesActive,
@@ -1746,9 +2237,12 @@ class _ReaderScreenState extends State<ReaderScreen>
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: const Color(0xFFF1EDE1),
+      backgroundColor: _readerSheetColor,
       constraints: const BoxConstraints(maxWidth: 600),
-      builder: (_) => SourceSwitchSheet(controller: controller, book: book),
+      builder: (_) => Theme(
+      data: _readerSheetTheme(),
+      child: SourceSwitchSheet(controller: controller, book: book),
+    ),
     );
     if (switched != null && mounted) {
       showMessage(context, '已切换到 ${switched.sourceLabel}。');
@@ -1758,10 +2252,12 @@ class _ReaderScreenState extends State<ReaderScreen>
   void _showToc() => showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: Colors.white,
+    backgroundColor: _readerSheetColor,
     showDragHandle: true,
     constraints: const BoxConstraints(maxWidth: 640),
-    builder: (context) => ReaderTocSheet(
+    builder: (context) => Theme(
+      data: _readerSheetTheme(),
+      child: ReaderTocSheet(
       book: book,
       currentChapterIndex: _chapterIndex,
       descending: controller.settings.tocDescending,
@@ -1772,6 +2268,7 @@ class _ReaderScreenState extends State<ReaderScreen>
         Navigator.pop(context);
         unawaited(_jump(index));
       },
+    ),
     ),
   );
 
@@ -1812,143 +2309,41 @@ class _ReaderScreenState extends State<ReaderScreen>
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    backgroundColor: Colors.white,
+    backgroundColor: _readerSheetColor,
     constraints: const BoxConstraints(maxWidth: 600),
     builder: (sheetContext) => AnimatedBuilder(
       animation: controller,
       builder: (_, _) => Theme(
-        data: appTheme(),
+        data: _readerSheetTheme(),
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 拖动条已经隔开了标题，这里不再加分隔线：多一行辅助入口就会把
-              // 下方的排版区（含背景圆点）推出短屏可视范围。
-              ListTile(
-                key: const Key('reader-auto-read'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('自动翻页'),
-                subtitle: Text(
-                  _autoReadActive ? '当前每 ${_autoReadSeconds!} 秒翻一页' : '仅支持分页阅读',
+              Padding(
+                padding: const EdgeInsets.fromLTRB(0, 0, 0, 16),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '阅读设置',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    CircleIconButton(
+                      key: const Key('reader-settings-close'),
+                      icon: DesignIcons.close,
+                      tooltip: '关闭',
+                      onPressed: () => Navigator.pop(sheetContext),
+                    ),
+                  ],
                 ),
-                trailing: Icon(
-                  _autoReadActive
-                      ? Icons.pause_circle_outline
-                      : Icons.auto_mode_outlined,
-                ),
-                enabled: _autoReadActive || _canStartAutoRead,
-                onTap: _autoReadActive || _canStartAutoRead
-                    ? () {
-                        Navigator.pop(sheetContext);
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted) _showAutoReadControls();
-                        });
-                      }
-                    : null,
               ),
-              ListTile(
-                key: const Key('reader-read-aloud'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('设备朗读'),
-                subtitle: Text(
-                  _readAloud.isSpeaking
-                      ? '正在朗读当前章节'
-                      : (_readAloud.isSupported
-                            ? '使用设备已安装的中文语音'
-                            : '仅 Android 设备可用'),
-                ),
-                trailing: Icon(
-                  _readAloud.isSpeaking
-                      ? Icons.stop_circle_outlined
-                      : Icons.volume_up_outlined,
-                ),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) _showReadAloudControls();
-                  });
-                },
-              ),
-              ListTile(
-                key: const Key('reader-mark'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('段落标注'),
-                subtitle: const Text('标注当前显示段落，可添加本地备注'),
-                trailing: const Icon(Icons.highlight_alt_outlined),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) _showMarkSheet();
-                  });
-                },
-              ),
-              ListTile(
-                key: const Key('reader-selected-text-mark'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('选中文字标注'),
-                subtitle: Text(
-                  _hasActiveDisplayRules
-                      ? '正文显示替换启用时不可使用'
-                      : controller.settings.flow != ReaderFlow.scrolling
-                      ? '切换到上下滚动后可选择文字'
-                      : _canMarkSelectedText
-                      ? '已选择唯一文字片段'
-                      : '长按并拖动选择当前段落文字',
-                ),
-                trailing: const Icon(Icons.text_fields),
-                enabled: _canMarkSelectedText,
-                onTap: !_canMarkSelectedText
-                    ? null
-                    : () {
-                        Navigator.pop(sheetContext);
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted) _showSelectedTextMarkSheet();
-                        });
-                      },
-              ),
-              ListTile(
-                key: const Key('reader-selected-explain'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('解释这段文字'),
-                subtitle: Text(
-                  _canExplainSelection
-                      ? '用本机已读内容回顾这一段，不连接模型'
-                      : controller.settings.flow != ReaderFlow.scrolling
-                      ? '切换到上下滚动后可选择文字'
-                      : '长按并拖动选择当前段落文字',
-                ),
-                trailing: const Icon(Icons.auto_awesome_outlined),
-                enabled: _canExplainSelection,
-                onTap: !_canExplainSelection
-                    ? null
-                    : () {
-                        Navigator.pop(sheetContext);
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted) _openSelectionAssistant();
-                        });
-                      },
-              ),
-              ListTile(
-                key: const Key('reader-mark-manager'),
-                contentPadding: EdgeInsets.zero,
-                title: const Text('段落标注管理'),
-                subtitle: Text(
-                  '本书已保存 ${controller.readerMarks(widget.bookId).length} 条本地标注',
-                ),
-                trailing: const Icon(Icons.collections_bookmark_outlined),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) unawaited(_showMarkManager());
-                  });
-                },
-              ),
-              const Divider(height: 28),
-              // 排版六行放在辅助功能之后：面板一打开先看到自动翻页/朗读/标注，
-              // 往下滑才是字号、行距与背景。设计稿把六行放在首位，但阅读页的
-              // 这些操作入口也依赖面板顶部可达，两者冲突时优先保住操作可达性。
               ReaderPreferences(
+                showHeading: false,
                 settings: controller.settings,
                 onChanged: _updateReaderSettings,
                 stylePresets: controller.readerStylePresets,
@@ -1973,10 +2368,10 @@ class _ReaderScreenState extends State<ReaderScreen>
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: _readerSheetColor,
       constraints: const BoxConstraints(maxWidth: 620),
       builder: (_) => Theme(
-        data: appTheme(),
+        data: _readerSheetTheme(),
         child: ReadingAssistantSheet(
           book: book,
           chapterTitle: _chapter?.title ?? book.title,
@@ -1996,10 +2391,10 @@ class _ReaderScreenState extends State<ReaderScreen>
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: _readerSheetColor,
       constraints: const BoxConstraints(maxWidth: 600),
       builder: (context) => Theme(
-        data: appTheme(),
+        data: _readerSheetTheme(),
         child: NoteComposer(
           controller: controller,
           book: book,

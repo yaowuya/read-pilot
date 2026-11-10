@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../design_icons.dart';
 import '../theme.dart';
 
 String errorMessage(Object error) =>
@@ -157,7 +158,7 @@ class EmptyState extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.only(bottom: 16),
             child: Icon(
-              Icons.menu_book_outlined,
+              DesignIcons.bookOpen,
               size: 36,
               color: AppColors.muted,
             ),

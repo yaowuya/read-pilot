@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/book.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'book_cover.dart';
 import 'common.dart';
@@ -121,7 +122,7 @@ class _ReaderTocSheetState extends State<ReaderTocSheet> {
             tooltip: _descending ? '改为正序' : '改为倒序',
             isSelected: _descending,
             onPressed: _saving ? null : _toggleOrder,
-            icon: const Icon(Icons.swap_vert),
+            icon: const Icon(DesignIcons.arrowUpDown),
           ),
         ],
       ),
@@ -209,7 +210,7 @@ class _ReaderTocSheetState extends State<ReaderTocSheet> {
                   style: TextStyle(fontSize: 12, color: Color(0xFF8E97A4)),
                 ),
                 SizedBox(width: 4),
-                Icon(Icons.my_location, size: 14, color: Color(0xFF8E97A4)),
+                Icon(DesignIcons.locateFixed, size: 14, color: Color(0xFF8E97A4)),
               ],
             ),
           ),
@@ -241,45 +242,59 @@ class _ReaderTocSheetState extends State<ReaderTocSheet> {
 
   Widget _chapterRow(int index, Chapter chapter) {
     final current = index == widget.currentChapterIndex;
-    return ListTile(
-      key: ValueKey('toc-chapter-$index'),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-      minLeadingWidth: 18,
-      horizontalTitleGap: 14,
-      selected: current,
-      selectedTileColor: AppColors.softBlue,
-      leading: SizedBox(
-        width: 18,
-        child: Text(
-          (index + 1).toString().padLeft(2, '0'),
-          style: TextStyle(
-            fontSize: 10,
-            color: current ? AppColors.blue : const Color(0xFFB4BAC4),
+    const rowBorder = Color(0xFFE8ECF0);
+    return Material(
+      color: current ? AppColors.softBlue : Colors.transparent,
+      child: InkWell(
+        key: ValueKey('toc-chapter-$index'),
+        onTap: _saving ? null : () => widget.onChapterSelected(index),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 48),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: rowBorder)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 10),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 22,
+                child: Text(
+                  (index + 1).toString().padLeft(2, '0'),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: current ? AppColors.blue : const Color(0xFFB4BAC4),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  chapter.title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: current ? FontWeight.w600 : FontWeight.w400,
+                    color: current ? AppColors.blue : AppColors.ink,
+                  ),
+                ),
+              ),
+              if (current)
+                const Icon(DesignIcons.audioLines, size: 17, color: AppColors.blue)
+              else if (chapter.isCached)
+                const Icon(
+                  DesignIcons.circleCheck,
+                  size: 17,
+                  color: AppColors.muted,
+                )
+              else
+                const Icon(
+                  DesignIcons.circle,
+                  size: 17,
+                  color: Color(0xFFBCC4CE),
+                ),
+            ],
           ),
         ),
       ),
-      title: Text(
-        chapter.title,
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: current ? FontWeight.w600 : FontWeight.w400,
-          color: current ? AppColors.blue : AppColors.ink,
-        ),
-      ),
-      trailing: current
-          ? const Icon(Icons.graphic_eq, size: 17, color: AppColors.blue)
-          : (chapter.isCached
-                ? const Icon(
-                    Icons.offline_pin_outlined,
-                    size: 17,
-                    color: AppColors.muted,
-                  )
-                : const Icon(
-                    Icons.check_circle_outline,
-                    size: 17,
-                    color: Color(0xFFBCC4CE),
-                  )),
-      onTap: _saving ? null : () => widget.onChapterSelected(index),
     );
   }
 
@@ -308,7 +323,7 @@ class _ReaderTocSheetState extends State<ReaderTocSheet> {
               child: Row(
                 children: [
                   const Icon(
-                    Icons.bookmark_outlined,
+                    DesignIcons.bookmark,
                     size: 16,
                     color: AppColors.blue,
                   ),
@@ -355,7 +370,7 @@ class _ReaderTocSheetState extends State<ReaderTocSheet> {
     padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
     child: const Row(
       children: [
-        Icon(Icons.download_outlined, size: 13, color: Color(0xFFA7ADB7)),
+        Icon(DesignIcons.download, size: 13, color: Color(0xFFA7ADB7)),
         SizedBox(width: 5),
         Expanded(
           child: Text(

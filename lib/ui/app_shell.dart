@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -17,6 +19,8 @@ import 'screens/reader_screen.dart';
 import 'screens/reading_history_screen.dart';
 import 'screens/search_screen.dart';
 import 'screens/sources_screen.dart';
+import 'screens/welcome_screen.dart';
+import 'design_icons.dart';
 import 'theme.dart';
 
 typedef LocalBookFilePicker = Future<List<LocalImportFile>?> Function();
@@ -33,14 +37,26 @@ class _AppShellState extends State<AppShell> {
   int _selected = 0;
   bool _importing = false;
   bool _opening = false;
+  bool? _showWelcome;
 
   // 设计稿固定底部三项；书源管理属于维护型功能，按稿收进「我的」。
   static const _labels = ['书架', '发现', '我的'];
   static const _icons = [
-    Icons.auto_stories_outlined,
-    Icons.explore_outlined,
-    Icons.person_outline,
+    DesignIcons.tabShelf,
+    DesignIcons.tabDiscover,
+    DesignIcons.tabProfile,
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadWelcome());
+  }
+
+  Future<void> _loadWelcome() async {
+    final show = await WelcomeScreen.shouldShow();
+    if (mounted) setState(() => _showWelcome = show);
+  }
 
   void _select(int index) => setState(() => _selected = index);
 
@@ -204,230 +220,240 @@ class _AppShellState extends State<AppShell> {
   );
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: widget.controller,
-    builder: (context, _) => LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 1000;
-        final content = IndexedStack(
-          index: _selected,
-          children: [
-            BookshelfScreen(
-              controller: widget.controller,
-              onOpen: _open,
-              onDetails: _details,
-              onImport: _importScreen,
-              onDiscover: () => _select(1),
-              onSearch: _search,
-            ),
-            DiscoverScreen(
-              controller: widget.controller,
-              onDetails: _details,
-              onOpen: _open,
-              onSources: _sources,
-              onBack: () => _select(0),
-              onImport: _importScreen,
-            ),
-            ProfileScreen(
-              controller: widget.controller,
-              onNotes: _notes,
-              onHistory: _history,
-              onSources: _sources,
-              onImport: _importScreen,
-              onBackup: _backup,
-              onSettings: _settings,
-            ),
-          ],
-        );
-        return Scaffold(
-          // No global app bar: every screen owns its own header (the shelf has
-          // its title row, discover its own toolbar), and a brand bar on top of
-          // them only repeated the product name.
-          body: SafeArea(
-            top: true,
-            bottom: false,
-            child: Row(
-              children: [
-                if (wide)
-                  SizedBox(
-                    width: 224,
-                    child: ColoredBox(
-                      color: Colors.white,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 22,
-                          vertical: 36,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Padding(
-                              padding: EdgeInsets.only(left: 12),
-                              child: Row(
-                                children: [
-                                  BrandMark(),
-                                  SizedBox(width: 14),
-                                  Text(
-                                    '阅读',
-                                    style: TextStyle(
-                                      fontSize: 26,
-                                      fontWeight: FontWeight.w600,
-                                      letterSpacing: 3,
+  Widget build(BuildContext context) {
+    if (_showWelcome == true) {
+      return WelcomeScreen(
+        onContinue: () => setState(() => _showWelcome = false),
+      );
+    }
+    return AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) => LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 1000;
+          final content = IndexedStack(
+            index: _selected,
+            children: [
+              BookshelfScreen(
+                controller: widget.controller,
+                onOpen: _open,
+                onDetails: _details,
+                onImport: _importScreen,
+                onDiscover: () => _select(1),
+                onSearch: _search,
+              ),
+              DiscoverScreen(
+                controller: widget.controller,
+                onDetails: _details,
+                onOpen: _open,
+                onSources: _sources,
+                onImport: _importScreen,
+              ),
+              ProfileScreen(
+                controller: widget.controller,
+                onNotes: _notes,
+                onHistory: _history,
+                onSources: _sources,
+                onImport: _importScreen,
+                onBackup: _backup,
+                onSettings: _settings,
+              ),
+            ],
+          );
+          return Scaffold(
+            // No global app bar: every screen owns its own header (the shelf has
+            // its title row, discover its own toolbar), and a brand bar on top of
+            // them only repeated the product name.
+            body: SafeArea(
+              top: true,
+              bottom: false,
+              child: Row(
+                children: [
+                  if (wide)
+                    SizedBox(
+                      width: 224,
+                      child: ColoredBox(
+                        color: Colors.white,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 22,
+                            vertical: 36,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 12),
+                                child: Row(
+                                  children: [
+                                    BrandMark(),
+                                    SizedBox(width: 14),
+                                    Text(
+                                      '阅读',
+                                      style: TextStyle(
+                                        fontSize: 26,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: 3,
+                                      ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const Padding(
-                              padding: EdgeInsets.only(left: 12, top: 14),
-                              child: Text(
-                                '让阅读，自由发生',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: AppColors.muted,
+                                  ],
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 44),
-                            for (var index = 0; index < _labels.length; index++)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: Material(
-                                  color: _selected == index
-                                      ? const Color(0xFFEEF0F3)
-                                      : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(10),
-                                  child: InkWell(
-                                    key: Key('nav-$index'),
+                              const Padding(
+                                padding: EdgeInsets.only(left: 12, top: 14),
+                                child: Text(
+                                  '让阅读，自由发生',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 44),
+                              for (
+                                var index = 0;
+                                index < _labels.length;
+                                index++
+                              )
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: Material(
+                                    color: _selected == index
+                                        ? const Color(0xFFEEF0F3)
+                                        : Colors.transparent,
                                     borderRadius: BorderRadius.circular(10),
-                                    onTap: () => _select(index),
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 18,
-                                        vertical: 15,
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Icon(
-                                            _icons[index],
-                                            size: 21,
-                                            color: _selected == index
-                                                ? AppColors.ink
-                                                : AppColors.muted,
-                                          ),
-                                          const SizedBox(width: 16),
-                                          Text(
-                                            _labels[index],
-                                            style: TextStyle(
-                                              fontSize: 15,
-                                              fontWeight: _selected == index
-                                                  ? FontWeight.w600
-                                                  : FontWeight.w400,
+                                    child: InkWell(
+                                      key: Key('nav-$index'),
+                                      borderRadius: BorderRadius.circular(10),
+                                      onTap: () => _select(index),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 18,
+                                          vertical: 15,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              _icons[index],
+                                              size: 21,
                                               color: _selected == index
                                                   ? AppColors.ink
                                                   : AppColors.muted,
                                             ),
-                                          ),
-                                        ],
+                                            const SizedBox(width: 16),
+                                            Text(
+                                              _labels[index],
+                                              style: TextStyle(
+                                                fontSize: 15,
+                                                fontWeight: _selected == index
+                                                    ? FontWeight.w600
+                                                    : FontWeight.w400,
+                                                color: _selected == index
+                                                    ? AppColors.ink
+                                                    : AppColors.muted,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            const SizedBox(height: 14),
-                            Material(
-                              color: Colors.transparent,
-                              borderRadius: BorderRadius.circular(10),
-                              child: InkWell(
-                                key: const Key('nav-sources'),
+                              const SizedBox(height: 14),
+                              Material(
+                                color: Colors.transparent,
                                 borderRadius: BorderRadius.circular(10),
-                                onTap: _sources,
-                                child: const Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: 18,
-                                    vertical: 15,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.language_outlined,
-                                        size: 21,
-                                        color: AppColors.muted,
-                                      ),
-                                      SizedBox(width: 16),
-                                      Text(
-                                        '书源管理',
-                                        style: TextStyle(
-                                          fontSize: 15,
+                                child: InkWell(
+                                  key: const Key('nav-sources'),
+                                  borderRadius: BorderRadius.circular(10),
+                                  onTap: _sources,
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 18,
+                                      vertical: 15,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.language_outlined,
+                                          size: 21,
                                           color: AppColors.muted,
                                         ),
-                                      ),
-                                    ],
+                                        SizedBox(width: 16),
+                                        Text(
+                                          '书源管理',
+                                          style: TextStyle(
+                                            fontSize: 15,
+                                            color: AppColors.muted,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                            const Spacer(),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    '在书页之间，\n遇见自己。',
-                                    style: TextStyle(
-                                      fontSize: 17,
-                                      height: 1.9,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 26),
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.shield_outlined,
-                                        size: 16,
-                                        color: AppColors.muted,
+                              const Spacer(),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      '在书页之间，\n遇见自己。',
+                                      style: TextStyle(
+                                        fontSize: 17,
+                                        height: 1.9,
+                                        fontWeight: FontWeight.w500,
                                       ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        '本地阅读 · ${widget.controller.books.length} 本书',
-                                        style: const TextStyle(
-                                          fontSize: 11,
+                                    ),
+                                    const SizedBox(height: 26),
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.shield_outlined,
+                                          size: 16,
                                           color: AppColors.muted,
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          '本地阅读 · ${widget.controller.books.length} 本书',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: AppColors.muted,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 1180),
-                      child: content,
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1180),
+                        child: content,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          bottomNavigationBar: wide
-              ? null
-              : _TabBar(selected: _selected, onSelect: _select),
-        );
-      },
-    ),
-  );
+            bottomNavigationBar: wide
+                ? null
+                : _TabBar(selected: _selected, onSelect: _select),
+          );
+        },
+      ),
+    );
+  }
 }
 
 /// 设计稿 `.tabbar`：白底、三项等宽、选中项蓝字并在图标下方点一个小圆点。

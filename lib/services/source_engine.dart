@@ -34,7 +34,7 @@ class SourceEngine {
     this.timeout = const Duration(seconds: 15),
     this.maxResponseBytes = 2 * 1024 * 1024,
   }) : _planner = planner ?? const RequestPlanner(),
-       _interpreter = interpreter ?? const RuleInterpreter(),
+       _interpreter = interpreter ?? RuleInterpreter(),
        _scriptRuntime = scriptRuntime ?? const SandboxedScriptRuntime(),
        _transport = SourceTransport(
          client: client,
@@ -79,6 +79,7 @@ class SourceEngine {
     int page = 1,
     Future<void>? abortTrigger,
   }) async {
+    _interpreter.session.clear();
     if (keyword.trim().isEmpty) return [];
     if (source.searchUrl.isEmpty) {
       throw const SourceException('缺少必填字段 searchUrl。');
@@ -113,6 +114,7 @@ class SourceEngine {
     Map<String, String> exploreInfo = const {},
     Future<void>? abortTrigger,
   }) async {
+    _interpreter.session.clear();
     final rules = source.exploreRules;
     _requireRules(rules, 'ruleExplore', const ['bookList', 'name', 'bookUrl']);
     final response = await _fetch(
@@ -196,8 +198,10 @@ class SourceEngine {
   }
 
   /// Refreshes descriptive fields without loading or replacing the chapter list.
-  Future<Book> refreshBookInfo(BookSource source, Book result) async =>
-      (await _loadBookInfo(source, result)).book;
+  Future<Book> refreshBookInfo(BookSource source, Book result) async {
+    _interpreter.session.clear();
+    return (await _loadBookInfo(source, result)).book;
+  }
 
   /// Loads a same-origin image through the source transport security policy.
   Future<Uint8List> loadCover(
@@ -245,6 +249,7 @@ class SourceEngine {
     Book result, {
     Future<void>? abortTrigger,
   }) async {
+    _interpreter.session.clear();
     final info = await _loadBookInfo(
       source,
       result,
@@ -364,15 +369,12 @@ class SourceEngine {
     Chapter chapter, {
     Future<void>? abortTrigger,
   }) async {
+    _interpreter.session.clear();
     if (chapter.url == null) throw const SourceException('章节没有正文地址。');
     final rules = source.contentRules;
     final contentRule = _requiredRule(rules, 'ruleContent', 'content');
-    final replacement = rules['replaceRegex'];
-    if (replacement != null &&
-        replacement.trim().isNotEmpty &&
-        !ContentReplacement.isSupported(replacement)) {
-      throw const SourceException('replaceRegex 必须使用安全的“正则##替换文本”格式。');
-    }
+    // Unsupported replaceRegex must not block reading: skip the cleanup rule and
+    // still return extracted paragraphs. Source editors already flag unsafe rules.
     final nextRule = rules['nextContentUrl'];
     // 只看选择器部分是否以 @html 结尾：规则常常写成
     // `.TxtContent@html##<script.*?</script>|…`，整串去比对会漏判，
@@ -434,19 +436,24 @@ class SourceEngine {
 
     final title = resolvedTitle.isEmpty ? chapter.title : resolvedTitle;
     final replacementRule = rules['replaceRegex'];
-    final Iterable<String> replacementInput;
-    try {
-      replacementInput =
-          replacementRule == null || replacementRule.trim().isEmpty
-          ? paragraphs
-          : [
-              const ContentReplacement().apply(
-                paragraphs.join('\n'),
-                replacementRule,
-              ),
-            ];
-    } on FormatException catch (error) {
-      throw SourceException(error.message);
+    late final Iterable<String> replacementInput;
+    if (replacementRule == null ||
+        replacementRule.trim().isEmpty ||
+        !ContentReplacement.isSupported(replacementRule)) {
+      replacementInput = paragraphs;
+    } else {
+      try {
+        replacementInput = [
+          const ContentReplacement().apply(
+            paragraphs.join('\n'),
+            replacementRule,
+          ),
+        ];
+      } on FormatException {
+        // Bounds/runtime failures also fall back to raw paragraphs so one bad
+        // cleanup rule cannot strand the reader on the load-error screen.
+        replacementInput = paragraphs;
+      }
     }
     final normalized = const ContentNormalizer().normalize(
       replacementInput,

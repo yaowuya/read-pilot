@@ -4,6 +4,7 @@ import '../../domain/reader_settings.dart';
 import '../../domain/reader_style_preset.dart';
 import '../reader/reader_palette.dart';
 import '../reader/reader_paragraph.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'common.dart';
 
@@ -20,6 +21,7 @@ class ReaderPreferences extends StatefulWidget {
     this.stylePresets = const [],
     this.onSaveStylePreset,
     this.onDeleteStylePreset,
+    this.showHeading = true,
   });
 
   final ReaderSettings settings;
@@ -28,6 +30,7 @@ class ReaderPreferences extends StatefulWidget {
   final Future<void> Function(String name, ReaderSettings settings)?
   onSaveStylePreset;
   final Future<void> Function(String id)? onDeleteStylePreset;
+  final bool showHeading;
 
   @override
   State<ReaderPreferences> createState() => _ReaderPreferencesState();
@@ -48,11 +51,11 @@ class _ReaderPreferencesState extends State<ReaderPreferences> {
   bool _serif = false;
 
   /// Draft background order: paper-white, cream, eye-care, mist, night.
+  /// 设计稿四色：纸白 / 米色 / 护眼 / 夜间。晨雾映射到护眼，不单独展示。
   static const _themeOrder = <ReaderTheme>[
     ReaderTheme.light,
     ReaderTheme.paper,
     ReaderTheme.sage,
-    ReaderTheme.mist,
     ReaderTheme.dark,
   ];
 
@@ -196,23 +199,23 @@ class _ReaderPreferencesState extends State<ReaderPreferences> {
     crossAxisAlignment: CrossAxisAlignment.start,
     mainAxisSize: MainAxisSize.min,
     children: [
-      Row(
-        children: [
-          const Text('阅读设置', style: TextStyle(fontWeight: FontWeight.w600)),
-          const Spacer(),
-          Text(
-            _saving ? '保存中…' : '自动保存',
-            style: const TextStyle(fontSize: 12, color: AppColors.muted),
-          ),
-        ],
-      ),
-      // 背景放在首位：设置面板本身位于若干功能项之后，只有靠前才不至于
-      // 在窄屏/矮窗口里落到折叠线以下（读者最常调的就是这一行）。
-      _themeRow(),
+      if (widget.showHeading)
+        Row(
+          children: [
+            const Text('阅读设置', style: TextStyle(fontWeight: FontWeight.w600)),
+            const Spacer(),
+            Text(
+              _saving ? '保存中…' : '自动保存',
+              style: const TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+          ],
+        ),
+      // 设计稿顺序：亮度 → 字号 → 字体 → 行距 → 背景 → 翻页。
       _brightnessRow(),
       _fontSizeRow(),
       _fontFamilyRow(),
       _leadingRow(),
+      _themeRow(),
       _flowRow(),
       const SizedBox(height: 10),
       const Text('排版预设', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -253,7 +256,7 @@ class _ReaderPreferencesState extends State<ReaderPreferences> {
               onPressed: _saving
                   ? null
                   : () => setState(() => _addingStylePreset = true),
-              icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+              icon: const Icon(DesignIcons.bookmark, size: 18),
               label: const Text('保存当前'),
             ),
           ],
@@ -359,7 +362,7 @@ class _ReaderPreferencesState extends State<ReaderPreferences> {
         Row(
           children: [
             const Icon(
-              Icons.brightness_low,
+              DesignIcons.sunDim,
               size: 18,
               color: Color(0xFF9DA5AF),
             ),
@@ -387,7 +390,7 @@ class _ReaderPreferencesState extends State<ReaderPreferences> {
               ),
             ),
             const Icon(
-              Icons.brightness_high,
+              DesignIcons.sun,
               size: 18,
               color: Color(0xFF9DA5AF),
             ),
@@ -768,7 +771,7 @@ class _ThemeSwatch extends StatelessWidget {
             : null,
       ),
       child: active
-          ? const Icon(Icons.check, size: 19, color: AppColors.blue)
+          ? const Icon(DesignIcons.check, size: 19, color: AppColors.blue)
           : null,
     );
     final swatch = Column(

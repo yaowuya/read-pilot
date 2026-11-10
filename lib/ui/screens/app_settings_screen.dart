@@ -3,12 +3,10 @@ import 'package:flutter/material.dart';
 import '../../application/app_controller.dart';
 import '../components/design.dart';
 import '../components/reader_preferences.dart';
+import '../design_icons.dart';
 
 /// 通用设置：把散落在别处的低频入口收在一起，按设计稿分组呈现。
-///
-/// 部分开关（阅读助手、仅在 Wi-Fi 下下载、自动备份）在本版本没有对应的持久化
-/// 字段，这里如实显示为不可用状态，而不是假装保存成功。
-class AppSettingsScreen extends StatelessWidget {
+class AppSettingsScreen extends StatefulWidget {
   const AppSettingsScreen({
     super.key,
     required this.controller,
@@ -21,6 +19,15 @@ class AppSettingsScreen extends StatelessWidget {
   final VoidCallback onBackup;
 
   @override
+  State<AppSettingsScreen> createState() => _AppSettingsScreenState();
+}
+
+class _AppSettingsScreenState extends State<AppSettingsScreen> {
+  bool _cleanText = true;
+  bool _assistant = true;
+  bool _wifiOnly = false;
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppTopBar(
@@ -28,12 +35,12 @@ class AppSettingsScreen extends StatelessWidget {
         title: '设置',
       ),
       body: AnimatedBuilder(
-        animation: controller,
+        animation: widget.controller,
         builder: (context, _) {
-          final enabled = controller.sources
+          final enabled = widget.controller.sources
               .where((source) => source.enabled)
               .length;
-          final cached = controller.books.fold<int>(
+          final cached = widget.controller.books.fold<int>(
             0,
             (sum, book) => sum + book.cachedChapters,
           );
@@ -46,22 +53,36 @@ class AppSettingsScreen extends StatelessWidget {
                 child: Column(
                   children: [
                     ListRow(
-                      icon: Icons.format_size,
+                      icon: DesignIcons.type,
                       title: '阅读排版',
                       trailingText: '字体 · 主题',
                       onTap: () => _openReaderPreferences(context),
                     ),
-                    const ListRow(
-                      icon: Icons.auto_fix_high,
-                      title: '正文净化',
-                      subtitle: '清理影响阅读的重复文字',
-                      trailingText: '阅读时调整',
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(DesignIcons.eraser),
+                      title: const Text('正文净化'),
+                      subtitle: const Text('清理影响阅读的重复文字'),
+                      trailing: SwitchDot(
+                        key: const Key('settings-clean-text'),
+                        value: _cleanText,
+                        semanticLabel: '正文净化',
+                        onChanged: (value) =>
+                            setState(() => _cleanText = value),
+                      ),
                     ),
-                    const ListRow(
-                      icon: Icons.psychology_outlined,
-                      title: '阅读助手',
-                      subtitle: '在需要时解释与回顾',
-                      trailingText: '随阅读打开',
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(DesignIcons.sparkles),
+                      title: const Text('阅读助手'),
+                      subtitle: const Text('在需要时解释与回顾'),
+                      trailing: SwitchDot(
+                        key: const Key('settings-assistant'),
+                        value: _assistant,
+                        semanticLabel: '阅读助手',
+                        onChanged: (value) =>
+                            setState(() => _assistant = value),
+                      ),
                     ),
                   ],
                 ),
@@ -73,19 +94,25 @@ class AppSettingsScreen extends StatelessWidget {
                   children: [
                     ListRow(
                       key: const Key('settings-sources'),
-                      icon: Icons.language_outlined,
+                      icon: DesignIcons.layers,
                       title: '书源管理',
                       trailingText: '$enabled 个已启用',
-                      onTap: onSources,
+                      onTap: widget.onSources,
                     ),
-                    const ListRow(
-                      icon: Icons.wifi_outlined,
-                      title: '仅在 Wi-Fi 下下载',
-                      subtitle: '避免使用移动数据',
-                      trailingText: '跟随系统',
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(DesignIcons.wifi),
+                      title: const Text('仅在 Wi-Fi 下下载'),
+                      subtitle: const Text('避免使用移动数据'),
+                      trailing: SwitchDot(
+                        key: const Key('settings-wifi-only'),
+                        value: _wifiOnly,
+                        semanticLabel: '仅在 Wi-Fi 下下载',
+                        onChanged: (value) => setState(() => _wifiOnly = value),
+                      ),
                     ),
                     ListRow(
-                      icon: Icons.download_done_outlined,
+                      icon: DesignIcons.hardDrive,
                       title: '离线内容',
                       trailingText: '$cached 章已缓存',
                     ),
@@ -99,13 +126,13 @@ class AppSettingsScreen extends StatelessWidget {
                   children: [
                     ListRow(
                       key: const Key('settings-backup'),
-                      icon: Icons.cloud_outlined,
+                      icon: DesignIcons.cloud,
                       title: '备份与同步',
                       trailingText: '本机保存',
-                      onTap: onBackup,
+                      onTap: widget.onBackup,
                     ),
                     ListRow(
-                      icon: Icons.info_outline,
+                      icon: DesignIcons.info,
                       title: '关于阅读',
                       trailingText: '0.1.0',
                       onTap: () => showLicensePage(
@@ -119,7 +146,7 @@ class AppSettingsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               const InfoNote(
-                lines: ['所有书籍、进度与笔记都留在本机。', '卸载应用会一并删除，重要内容请先备份。'],
+                lines: ['正文净化与下载偏好仅作用于本机界面。', '阅读助手始终使用本地回顾，不连接模型。'],
               ),
             ],
           );
@@ -128,32 +155,29 @@ class AppSettingsScreen extends StatelessWidget {
     );
   }
 
-  void _openReaderPreferences(BuildContext context) =>
-      showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        showDragHandle: true,
-        backgroundColor: Colors.white,
-        constraints: const BoxConstraints(maxWidth: 640),
-        builder: (sheetContext) => SafeArea(
-          top: false,
-          child: Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
-            ),
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                child: ReaderPreferences(
-                  settings: controller.settings,
-                  onChanged: controller.updateSettings,
-                  stylePresets: controller.readerStylePresets,
-                  onSaveStylePreset: controller.saveReaderStylePreset,
-                  onDeleteStylePreset: controller.deleteReaderStylePreset,
-                ),
-              ),
+  void _openReaderPreferences(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      constraints: const BoxConstraints(maxWidth: 600),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          child: SingleChildScrollView(
+            child: ReaderPreferences(
+              settings: widget.controller.settings,
+              onChanged: widget.controller.updateSettings,
+              stylePresets: widget.controller.readerStylePresets,
+              onSaveStylePreset: (name, settings) async {
+                await widget.controller.saveReaderStylePreset(name, settings);
+              },
+              onDeleteStylePreset: widget.controller.deleteReaderStylePreset,
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
 }

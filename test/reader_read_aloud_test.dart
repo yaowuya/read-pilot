@@ -9,6 +9,8 @@ import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/screens/reader_screen.dart';
 import 'package:sembast/sembast_memory.dart';
 
+import 'support/reader_chrome.dart';
+
 class _ReaderFakeEngine implements ReadAloudEngine {
   final started = Completer<void>();
   final completed = Completer<void>();
@@ -77,8 +79,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-read-aloud')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-read-aloud-start')));
@@ -87,8 +88,7 @@ void main() {
     expect(readAloud.state, ReadAloudState.speaking);
 
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-read-aloud')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-read-aloud-stop')));
@@ -121,8 +121,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await showChrome(tester);
-    await tester.tap(find.byKey(const Key('reader-settings')));
-    await tester.pumpAndSettle();
+    await openReaderMoreSheet(tester);
     await tester.tap(find.byKey(const Key('reader-read-aloud')));
     await tester.pumpAndSettle();
 

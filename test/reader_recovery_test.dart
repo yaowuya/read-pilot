@@ -14,6 +14,7 @@ import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/components/reader_preferences.dart';
 import 'package:read_pilot/ui/reader/reader_paragraph.dart';
 import 'package:read_pilot/ui/reader/reader_paginator.dart';
+import 'package:read_pilot/ui/design_icons.dart';
 import 'package:read_pilot/ui/screens/reader_screen.dart';
 import 'package:sembast/sembast_memory.dart';
 
@@ -774,11 +775,7 @@ void main() {
     await tester.tap(order);
     await tester.pumpAndSettle();
     expect(controller.settings.tocDescending, isTrue);
-    expect(
-      (tester.widget<ListTile>(find.byType(ListTile).first).title! as Text)
-          .data,
-      'Second chapter',
-    );
+    expect(find.text('Second chapter'), findsOneWidget);
     expect(
       controller.book(_bookId)!.chapters.map((chapter) => chapter.id),
       originalIds,
@@ -790,10 +787,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('倒序'), findsWidgets);
     expect(
-      tester
-          .widget<ListTile>(find.byKey(const ValueKey('toc-chapter-1')))
-          .selected,
-      isTrue,
+      find.descendant(
+        of: find.byKey(const ValueKey('toc-chapter-1')),
+        matching: find.byIcon(DesignIcons.audioLines),
+      ),
+      findsOneWidget,
     );
     expect(tester.takeException(), isNull);
   });

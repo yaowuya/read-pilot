@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../design_icons.dart';
 import '../theme.dart';
 
 /// Structural widgets transcribed from `docs/阅读助手_完整设计稿.html`.
@@ -75,7 +76,7 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
         ? const SizedBox.shrink()
         : CircleIconButton(
             key: const Key('topbar-back'),
-            icon: Icons.chevron_left,
+            icon: DesignIcons.chevronLeft,
             tooltip: '返回',
             onPressed: onBack!,
           ),
@@ -117,6 +118,33 @@ class SectionLabel extends StatelessWidget {
   );
 }
 
+/// Optional ink/surface override for sheets that should match the reader page.
+class ChromeColors extends ThemeExtension<ChromeColors> {
+  const ChromeColors({
+    required this.ink,
+    required this.muted,
+    required this.surface,
+  });
+
+  final Color ink;
+  final Color muted;
+  final Color surface;
+
+  static ChromeColors? maybeOf(BuildContext context) =>
+      Theme.of(context).extension<ChromeColors>();
+
+  @override
+  ChromeColors copyWith({Color? ink, Color? muted, Color? surface}) =>
+      ChromeColors(
+        ink: ink ?? this.ink,
+        muted: muted ?? this.muted,
+        surface: surface ?? this.surface,
+      );
+
+  @override
+  ChromeColors lerp(ThemeExtension<ChromeColors>? other, double t) => this;
+}
+
 /// A leading icon, a title with an optional second line, and a trailing slot.
 ///
 /// Used by 我的, 设置, 详情, 发现 and 书源 so the row rhythm matches the draft.
@@ -144,11 +172,14 @@ class ListRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chrome = ChromeColors.maybeOf(context);
+    final ink = chrome?.ink ?? iconColor;
+    final muted = chrome?.muted ?? AppColors.muted;
     final content = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
       child: Row(
         children: [
-          Icon(icon, size: 20, color: iconColor),
+          Icon(icon, size: 20, color: ink),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -156,20 +187,20 @@ class ListRow extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w500,
-                    color: AppColors.ink,
+                    color: ink,
                   ),
                 ),
                 if (subtitle != null) ...[
                   const SizedBox(height: 3),
                   Text(
                     subtitle!,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12.5,
                       height: 1.4,
-                      color: AppColors.muted,
+                      color: muted,
                     ),
                   ),
                 ],
@@ -181,18 +212,14 @@ class ListRow extends StatelessWidget {
               padding: const EdgeInsets.only(left: 8),
               child: Text(
                 trailingText!,
-                style: const TextStyle(fontSize: 12.5, color: AppColors.muted),
+                style: TextStyle(fontSize: 12.5, color: muted),
               ),
             ),
           if (trailing != null) ...[const SizedBox(width: 8), trailing!],
           if (onTap != null && showChevron)
-            const Padding(
-              padding: EdgeInsets.only(left: 6),
-              child: Icon(
-                Icons.chevron_right,
-                size: 18,
-                color: AppColors.muted,
-              ),
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: Icon(DesignIcons.chevronRight, size: 18, color: muted),
             ),
         ],
       ),
@@ -248,34 +275,36 @@ class CircleIconButton extends StatelessWidget {
   final double size;
 
   @override
-  Widget build(BuildContext context) => Tooltip(
-    message: tooltip,
-    child: Semantics(
-      button: true,
-      label: tooltip,
-      child: Material(
-        color: selected ? AppColors.softBlue : Colors.white,
-        shape: CircleBorder(
-          side: BorderSide(
-            color: selected ? AppColors.softBlue : AppColors.line,
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onPressed,
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: Icon(
-              icon,
-              size: size * .5,
-              color: selected ? AppColors.blue : AppColors.ink,
+  Widget build(BuildContext context) {
+    final chrome = ChromeColors.maybeOf(context);
+    final fill = selected
+        ? AppColors.softBlue
+        : (chrome?.surface ?? Colors.white);
+    final glyph = selected ? AppColors.blue : (chrome?.ink ?? AppColors.ink);
+    final border = selected
+        ? AppColors.softBlue
+        : (chrome?.ink.withValues(alpha: .16) ?? AppColors.line);
+    return Tooltip(
+      message: tooltip,
+      child: Semantics(
+        button: true,
+        label: tooltip,
+        child: Material(
+          color: fill,
+          shape: CircleBorder(side: BorderSide(color: border)),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            child: SizedBox(
+              width: size,
+              height: size,
+              child: Icon(icon, size: size * .5, color: glyph),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// Search field shaped as the draft's `.search-pill`: 42 px tall, fully
@@ -316,7 +345,7 @@ class SearchPill extends StatelessWidget {
     child: Row(
       children: [
         const SizedBox(width: 14),
-        const Icon(Icons.search, size: 18, color: AppColors.muted),
+        const Icon(DesignIcons.search, size: 18, color: AppColors.muted),
         const SizedBox(width: 8),
         Expanded(
           child: TextField(
@@ -396,7 +425,7 @@ class InfoNote extends StatelessWidget {
   const InfoNote({
     super.key,
     required this.lines,
-    this.icon = Icons.info_outline,
+    this.icon = DesignIcons.info,
   });
 
   final List<String> lines;

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/shelf_group.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'common.dart';
 
@@ -140,7 +141,7 @@ class _ShelfGroupManagerSheetState extends State<ShelfGroupManagerSheet> {
                       key: const Key('shelf-group-close'),
                       tooltip: '关闭',
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close),
+                      icon: const Icon(DesignIcons.close),
                     ),
                   ],
                 ),
@@ -167,13 +168,13 @@ class _ShelfGroupManagerSheetState extends State<ShelfGroupManagerSheet> {
                             key: Key('shelf-group-rename-${group.id}'),
                             tooltip: '重命名${group.name}',
                             onPressed: _busy ? null : () => _edit(group),
-                            icon: const Icon(Icons.edit_outlined),
+                            icon: const Icon(DesignIcons.type),
                           ),
                           IconButton(
                             key: Key('shelf-group-delete-${group.id}'),
                             tooltip: '删除${group.name}',
                             onPressed: _busy ? null : () => _delete(group),
-                            icon: const Icon(Icons.delete_outline),
+                            icon: const Icon(DesignIcons.folderOpen),
                           ),
                         ],
                       ),
@@ -192,7 +193,7 @@ class _ShelfGroupManagerSheetState extends State<ShelfGroupManagerSheet> {
                 FilledButton.icon(
                   key: const Key('shelf-group-add'),
                   onPressed: _busy ? null : () => _edit(),
-                  icon: const Icon(Icons.add, size: 18),
+                  icon: const Icon(DesignIcons.plus, size: 18),
                   label: const Text('新建分组'),
                 ),
                 if (_error != null)
@@ -278,7 +279,7 @@ class _ShelfBookGroupsSheetState extends State<ShelfBookGroupsSheet> {
                       key: const Key('shelf-group-membership-close'),
                       tooltip: '关闭',
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close),
+                      icon: const Icon(DesignIcons.close),
                     ),
                   ],
                 ),

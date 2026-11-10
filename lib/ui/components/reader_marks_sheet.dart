@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../application/app_controller.dart';
 import '../../domain/reader_mark.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 import 'common.dart';
 
@@ -162,7 +163,7 @@ class _ReaderMarksSheetState extends State<ReaderMarksSheet> {
                                       ),
                                       if (location == null)
                                         const Icon(
-                                          Icons.link_off_outlined,
+                                          DesignIcons.linkOff,
                                           size: 18,
                                           color: AppColors.muted,
                                         ),
@@ -208,7 +209,7 @@ class _ReaderMarksSheetState extends State<ReaderMarksSheet> {
                                               ? null
                                               : () => widget.onOpen(location),
                                           icon: const Icon(
-                                            Icons.menu_book_outlined,
+                                            DesignIcons.bookOpen,
                                             size: 18,
                                           ),
                                           label: const Text('回到段落'),

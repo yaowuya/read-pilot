@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../domain/book.dart';
 import '../../services/book_text_search.dart';
+import '../design_icons.dart';
 import '../theme.dart';
 
 /// Lets the reader search text already cached for one book.
@@ -107,7 +108,7 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
                                 }),
                                 decoration: const InputDecoration(
                                   hintText: '查找正文内容',
-                                  prefixIcon: Icon(Icons.search, size: 20),
+                                  prefixIcon: Icon(DesignIcons.search, size: 20),
                                 ),
                               ),
                             ),
