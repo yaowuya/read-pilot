@@ -147,7 +147,8 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
       if (!mounted) return;
       showMessage(
         context,
-        '已导入 ${result.total} 个书源（新增 ${result.added}，更新 ${result.updated}）。',
+        '已导入 ${result.total} 个书源（新增 ${result.added}，更新 ${result.updated}）。'
+        '${preview.skippedCount == 0 ? '' : '另有 ${preview.skippedCount} 个无法解析的书源已跳过。'}',
       );
       Navigator.pop(context, result);
     } catch (error) {
@@ -352,6 +353,10 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
                 style: TextStyle(color: AppColors.muted, height: 1.7),
               ),
               const SizedBox(height: 12),
+              if (preview.skipped.isNotEmpty) ...[
+                _skippedNotice(preview),
+                const SizedBox(height: 12),
+              ],
               Wrap(
                 spacing: 8,
                 children: [
@@ -418,6 +423,56 @@ class _SourceImportSheetState extends State<SourceImportSheet> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Discloses rejected entries so a partially imported feed is never silent.
+  ///
+  /// Reasons are grouped and capped: a 1.5k-entry feed usually fails for only a
+  /// handful of distinct causes, so counts read better than 66 separate lines.
+  Widget _skippedNotice(SourceImportPreview preview) {
+    final groups = groupSourceImportSkips(preview.skipped);
+    const maxGroups = 4;
+    final shown = groups.take(maxGroups).toList();
+    final hidden = groups.skip(shown.length).toList();
+    return Container(
+      key: const Key('source-preview-skipped'),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.softBlue,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '跳过 ${preview.skippedCount} 个无法解析的书源，'
+            '其余 ${preview.sources.length} 个可导入。',
+            style: const TextStyle(color: AppColors.ink, height: 1.6),
+          ),
+          for (final group in shown)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '· ${group.reason}（${group.count} 个）',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: AppColors.muted, height: 1.5),
+              ),
+            ),
+          if (hidden.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '· 另有 ${hidden.length} 类原因，共 '
+                '${hidden.fold(0, (sum, group) => sum + group.count)} 个。',
+                style: const TextStyle(color: AppColors.muted, height: 1.5),
+              ),
+            ),
+        ],
       ),
     );
   }

@@ -8,6 +8,16 @@
 - 手动换源、封面获取与刷新、章节缓存、书签笔记、左右分页、纵向滚动、两字首行缩进、目录倒序、段距、字重及纸张主题。
 - 真实双源切换的历史验收仍 **BLOCKED**：2026-11-02 对用户提供合集的有界真实搜索没有得到第二个同名候选；在导入上限提升到 100 MiB 后，另一个 URL 仍发生网络连接失败，未绕过安全限制。
 
+## 2026-11-08 界面重构后的迁移状态
+
+按 `docs/阅读助手_完整设计稿.html` 重排界面时，只改外观与入口，没有新增或削减书源能力：发现页的 `exploreUrl` 分类格子在书源层原样保留（点书源行进分类层），换源面板仍是 16 并发搜索 + 10 天候选缓存 + 作者过滤 + 字数排序 + 置顶/置底/停用/删除，书源管理页保留导入、分组筛选、多选编辑、校验与状态写回。搜索页新增「精确搜索」与分组/书源范围面板，二者都只过滤本地已有的搜索结果集合，不改变 `searchSources` 的抓取范围。
+
+## 2026-11-09 阅读页排版与工具栏收尾
+
+- 阅读页排版器 `ReaderPaginator`/`ReaderParagraph` 增加 `indent` 标记（首段不缩进），只影响展示层排版；正文内容、章节定位与恢复锚点不变。
+- 夜间配色按设计稿调整为 `#202225`/`#C3C0B8`（`ReaderPalette` 展示层常量，`ReaderSettings` 存储 schema 不变）。
+- 阅读工具顶栏收敛（返回/书签/更多），书内查找、本书笔记、主题切换改为菜单项；书源能力（搜索/换源/目录/设置）入口全部保留。
+
 ## 当前迁移阶段（2026-11-02）
 
 本轮继续完善安全书源管理：URL/文本/文件仍先经过大小、来源、重定向和格式检查；检查成功后仅在内存显示来源预览，用户可明确选择子集，再以既有 `selectedSourceIds` 事务一次提交。安全书源管理、受限规则解析与原子换源继续作为本项目的可验证迁移范围；后续增量仍不得引入 Cookie/WebView、远程订阅、代理绕过、DRM 绕过或未受限来源代码执行。
@@ -24,14 +34,14 @@
 | --- | --- | --- | --- |
 | 书内查找 | 只搜索本地/已缓存正文；按段落展示章节与高亮片段，点选保留章节/段落锚点。单次最多 100 个命中、4 MiB 已缓存文本、100 个查询代码单元；越界明确标识，绝不暗中下载未缓存章节。 | [SearchContentScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/searchContent/SearchContentScreen.kt) | 服务、弹层与阅读跳转测试通过；浏览器已显示入口和缓存覆盖说明，自动输入未能证明命中交互。 |
 | 主动有限缓存 | 仅对已加入书架的远程书籍，从当前位置明确选择 1–5 个连续章节，顺序获取；可停止后续章节，已成功缓存的结果保留，失败显示并可重试同一小范围。旧读者与缓存共用章节 Future，停止不会中断正在阅读的请求。 | [DownloadSheet](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/read/sheet/DownloadSheet.kt) | 控制器、组件、详情及预取消/进度取消测试通过；没有运行真实批量下载。 |
-| 自定义书架分组 | 以独立记录维护 `Book.id` 归属，一本书可加入多个分组；最多 32 组、名称最多 24 个字符。重命名和删组不修改书籍/进度/笔记，移出书架时在同一事务清除归属；与原“全部/在读/已读”交叉筛选。 | [GroupManageSheet](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/main/bookshelf/GroupManageSheet.kt) | 持久化、删组、归属与窄屏键盘共 7 项聚焦测试通过；浏览器已显示入口和管理弹层，自动输入未证明创建交互；新版尚未安装到模拟器。 |
+| 自定义书架分组 | 以独立记录维护 `Book.id` 归属，一本书可加入多个分组；最多 32 组、名称最多 24 个字符。重命名和删组不修改书籍/进度/笔记，移出书架时在同一事务清除归属。有分组时书架首层是分组卡片（组内前四本拼 2×2 封面墙 + 右上角「在读 N」），点「全部书籍」或某张卡才进书籍网格；没有分组时直接是平铺网格。 | [GroupManageSheet](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/main/bookshelf/GroupManageSheet.kt) | 持久化、删组、归属共 3 项、卡片层与排序共 5 项聚焦测试通过；MuMu 安卓 15 上逐屏确认卡片层、组内层、排序、搜索与列表切换。 |
 | 有界缓存清理 | 仅已加入书架的远程书，在书籍详情逐章选择 1–5 个已缓存章节并二次确认。事务内复核来源、目录、最新阅读位置和书签；当前控制器正在下载的章节不可清理。失效选择自动撤销，确认期间变更需要重新确认；不自动删除本地书籍正文。 | [BookCacheManageScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/cache/manage/BookCacheManageScreen.kt) | 仓储、控制器与弹层共 13 项聚焦测试通过；只对合成书籍执行清理，真实书源与新版原生界面未验收。 |
 | 按书正文替换 | 每本书最多 10 条有序规则，支持创建、编辑、启停、排序、预览和确认删除；只按字面匹配并作用于阅读显示，不重写缓存、进度或笔记引文。分页依据显示文本测量，规则热更新恢复段落锚点；单段最多 131072、整章最多 2097152 个 UTF-16 代码单元，超出整章预算则使用原文。书内查找仍搜索原文。 | [ReplaceRuleScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/replace/ReplaceRuleScreen.kt) | 字面量、整章预算、持久化、阅读锚点、窄屏按钮和原文搜索提示的测试通过；Web 已展示入口和弹层，按钮前的实际间距约 20px。浏览器实际编辑与原生设备尚未验收，不承诺上游正则功能等价。 |
 | 本地备份与恢复 | 保留版本 1 的 10 MiB 明文 JSON 兼容导出；用户可显式选择密码加密封套，使用 16 字节随机盐、PBKDF2-HMAC-SHA256（210,000 次）派生 256 位密钥和 AES-256-GCM 认证加密。密码不保存、不上传、遗失后无法恢复；错误密码或篡改只显示验证失败。两种备份都只导出本地书籍、对应笔记、分组、显示规则和阅读设置，排除网络书籍、书源定义、远程缓存、段落标注与可能带凭据的链接。导入先预览，默认只增加新书、同名分组归入新书，阅读设置需单独勾选；事务失败整批回滚。 | [BackupRestoreOptionSheets](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/config/backupConfig/BackupRestoreOptionSheets.kt) | 加密编解码回归覆盖随机盐/nonce、正确密码还原、错误密码与篡改拒绝；面板回归覆盖二次密码确认、密文无正文和密码导入预览。Web 已显示加密导出与密码对话框；真实浏览器文件保存/选择仍不伪造。 |
 | 本地 EPUB 导入 | 仅支持标准本地 EPUB 的 `container.xml`、OPF manifest/spine 与 XHTML 正文；压缩包 20 MiB、条目 2048、单条目 4 MiB、声明解压总量 50 MiB、正文 20 MiB。ZIP CRC 与受限输出流必须通过；加密/DRM 标记、DTD/entity、路径穿越、脚本、远程资源、图片与音频均不导入或执行。 | [Upstream README](https://github.com/HapeLee/legado-with-MD3/tree/b21025d3769ec9c4028514914f3c555a1ba284b8) | 合成 EPUB 测试覆盖标准 spine、路径、DTD、DRM 标记、资源上限与文件分派；Web 已显示 TXT/EPUB 导入提示，真实文件选择器与原生设备未验收。 |
 | 有限批量本地导入 | 用户一次明确选择 1–5 个 TXT/EPUB；总字节数最多 32 MiB。所有文件先解析与校验，随后经一次书架事务写入；任一文件无效时不持久化同批已解析文件。TXT 与 EPUB 使用共享的单调本地 ID，避免同一时钟刻度下的碰撞。没有目录选择、递归扫描、后台导入、广泛存储权限或归档格式扩展。 | [ImportBookScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/import/local/ImportBookScreen.kt) | 新增控制器与手机书架 Widget 回归覆盖无效批次零写入、双文件 ID 唯一、原子持久化和合并成功提示；Web 手机预览显示“批量导入 TXT 或 EPUB”，没有控制台或网络错误。真实选择器仍不在浏览器中伪造。 |
-| 有界书源健康检查 | 用户从已保存书源显式打开面板，再点击“开始检查”。依次检查搜索、发现、详情与目录、正文；每阶段最多等待 8 秒，停止或超时后不再开始后续阶段。只返回数量和固定分类摘要，绝不保留正文、请求头、URL 响应、Cookie 或诊断历史；不改写书源，也不重试或后台监控。 | [CheckSourceBottomSheet](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/source/manage/CheckSourceBottomSheet.kt) | 内存控制器测试覆盖四阶段临时结果与停止后跳过排队阶段；手机书源页 Widget 测试覆盖显式入口和启动前不发起请求。Web 书源页在本地运行时资源模式下无控制台、网络或服务端错误；未对真实外部书源执行检查。 |
-| 书源导入预览与选择 | 文本、文件或 URL 先经既有 100 MiB、500 来源、64 层 JSON、URL/重定向/内容类型检查，检查阶段仅保存在内存。用户可在受限列表中全选、清空或逐条选择；空选择不能提交，选中子集通过 `selectedSourceIds` 一次原子写入。不会显示响应正文、请求头或 Cookie，也不会在预览阶段执行来源规则。 | [ImportBookScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/import/local/ImportBookScreen.kt) | 来源界面回归覆盖预览零写入、默认全选、子集提交、准备阶段取消、保存阶段不可取消和失败保留预览；144 项来源管理/解析/换源回归全部通过。Web 真实显示“检查并预览”入口与输入校验错误态；浏览器自动文本注入未作为预览提交证据。 |
+| 有界书源健康检查 | 用户从已保存书源显式打开面板，再点击“开始检查”。先清掉上一次结论（失效分组与 `// Error:` 备注），再依次检查搜索、发现、详情与目录、正文；任一入口失败即停止后续阶段。搜索、发现、详情与目录、正文四个阶段可分别开关，至少保留搜索或发现之一；整轮共用一份超时预算（默认 180 秒，可选 60/180/300），而不是每阶段各给一份。结论写回书源而非只显示一次：`respondTime` 记录整轮耗时（超时记“预算 + 已用时间”，让死源排到列表末尾），失效原因写进 `bookSourceGroup`，失败详情以 `// Error:` 前缀写进 `bookSourceComment`；用户取消的一轮不写回。仍不保留正文、请求头、URL 响应、Cookie 或诊断历史，也不重试或后台监控。 | [CheckSourceBottomSheet](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/source/manage/CheckSourceBottomSheet.kt)、[BookSourceCheckRepository](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/data/repository/BookSourceCheckRepository.kt) | 控制器回归覆盖四阶段结论、失败即停、超时记“预算 + 已用时间”、取消不覆盖上次结论、开关持久化与“至少开一个入口”；书源分组/备注回归覆盖标签增删、`// Error:` 前缀清理与 `respondTime` 往返；限速器回归覆盖解析、串行放行、按源隔离与声明变更；手机书源页 Widget 测试覆盖显式入口、启动前不发起请求、结论文案与标签展示。未对真实外部书源执行检查。 |
+| 书源导入预览与选择 | 文本、文件或 URL 先经既有 100 MiB、10,000 来源、64 层 JSON、URL/重定向/内容类型检查，检查阶段仅保存在内存。用户可在受限列表中全选、清空或逐条选择；空选择不能提交，选中子集通过 `selectedSourceIds` 一次原子写入。不会显示响应正文、请求头或 Cookie，也不会在预览阶段执行来源规则。 | [ImportBookScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/import/local/ImportBookScreen.kt) | 来源界面回归覆盖预览零写入、默认全选、子集提交、准备阶段取消、保存阶段不可取消和失败保留预览；144 项来源管理/解析/换源回归全部通过。Web 真实显示“检查并预览”入口与输入校验错误态；浏览器自动文本注入未作为预览提交证据。 |
 | 有界自动翻页 | 仅在分页阅读中由用户从阅读设置选择 5/10/20 秒每页。定时器不持久化，不自动标记读完；到最后一页、切换滚动阅读、读者离开、应用非前台或章节加载失败时停止。没有后台服务、悬浮窗、内容上传或跨设备状态。 | [AutoReadSheet](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/read/sheet/AutoReadSheet.kt) | Widget 回归覆盖显式启动后推进一页、明确停止与非前台停止；34 条读者恢复/布局回归通过。Web 预览显示设置入口和三档对话框；预览转入非前台后自动停止，且无控制台、网络或服务端错误。 |
 | 本地排版预设 | 在既有阅读设置中提供舒缓（24 px / 2.1 / 28 px）、均衡（22 px / 1.9 / 20 px）和紧凑（20 px / 1.6 / 10 px）三种组合。只写入已有的字号、行距与段距字段，保留用户当前主题、翻页方式和加粗偏好；没有动态系统颜色、外部主题包、账号或设备颜色数据。 | [ReadStyleDelegate](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/read/ReadStyleDelegate.kt) | 组件回归覆盖舒缓预设保存且不重置主题/流式阅读/加粗；Web 实际选择后显示 24 px、2.1 倍行距与 28 px 段距，控制台、网络与服务端无错误。 |
 | 有界本地阅读配色 | 在既有纸张、明亮、夜间之上增加青苔与晨雾两种经审查的固定配色；背景、正文、弱化文本和错误提示都从单一不可变调色板解析。选择仅更新已有 `ReaderSettings.theme`，命名样式预设自动携带该值；切到夜间再切回会恢复最近的日间配色，不重排正文、不移动阅读锚点。所有色值随应用发布，未提供任意 HEX/RGB 输入、动态 Monet、设备颜色、外部主题包或同步。 | [ThemeConfigScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/config/themeConfig/ThemeConfigScreen.kt) | 调色板、设置 JSON、偏好组件、窄屏换行、样式预设和读者锚点回归通过；Web 真实打开读者设置选择“青苔”，读者画面切换为浅绿配色，375×812 手机视口显示五个可访问配色芯片，控制台和网络失败记录为空。 |
@@ -47,11 +57,40 @@
 
 启动时**不自动**按连续空格重写已有章节；现有未提交的旧缓存整理只有在内部明确请求标记存在时才运行。单靠空白无法证明原始段落边界，自动整理可能移动进度与书签。需要用户可预览、可撤销的重排操作时，再单独设计 UI 和备份路径。
 
+## 2026-11-05 增量：发现页、书源管理、换源与源加载
+
+这一轮把四个此前只有“能用”的面向按上游行为重做，全部仍是独立实现，没有复制 Kotlin 源码：
+
+- **发现页**：按 `ExploreMainRoute` 的两种模式重写。浏览模式每个书源一块卡片，列出它自己声明的发现分类；内容模式是书源 + 分类 pager，并记住上次的书源与分类（对应 `PreferKey.exploreMainSourceUrl` / `exploreMainKind`）。`exploreUrl` 完整支持 `ExploreKind` 的 JSON 数组与 `title::url` 两种写法，以及 `url` / `text` / `button` / `toggle` / `select` 五种类型；表单取值写进该源自己的 InfoMap 并作为请求变量，取代上游在 `{{...}}` 里跑 JS 的做法。脚本生成的 `exploreUrl` 明确提示无法加载，而不是静默变成空列表。原来的搜索能力移到顶栏搜索面板，选定书源时只搜那一条源。
+- **书源管理**：行内状态、分组 chip、备注、启用开关、编辑、检查、溢出菜单（置顶 / 开关发现 / 查看规则 / 复制 JSON / 删除）；按名称 + URL + 分组搜索；多选后可批量启用、停用、删除与导出。新增编辑面板（七个分节 + 原始 JSON 高级模式），未知的 Legado 字段通过 raw map 原样保留。`bookSourceGroup` / `customOrder` / `enabledExplore` / `bookSourceComment` 现在都有真实语义，置顶用 `min(customOrder) - 1`。
+- **换源搜索**：候选过滤改为 `fName == name && (!checkAuthor || fAuthor.contains(author))`，作者按包含匹配；新增“只保留同一作者”和“按字数排序”两个开关（后者对应上游在 `loadWordCount` 打开时的比较器），开关写回后重新搜索而非只重排现有列表。
+- **源加载处理逻辑**：新增按书源 `concurrentRate` 的限速器，额度按 `bookSourceUrl` 在搜索、发现、封面、目录、正文之间共用；跨源搜索并发上限从 4 提到 16（对齐 `threadCount`）。书源校验按 `BookSourceCheckRepository.checkSource` 重排为“先清旧结论 → 搜索 → 发现 → 详情与目录 → 正文”，任一入口失败即停止后续阶段，结论写回 `respondTime` / 分组标签 / `// Error:` 备注，取消的一轮不写回，整轮共用一份 180 秒预算。
+
+| 能力 | 当前实现与边界 | 上游行为参考 | 验证状态 |
+| --- | --- | --- | --- |
+| 发现页两模式 | 书源卡片列出各自的 `ExploreKind`；内容模式为书源 + 分类 pager，记住选择。无脚本引擎，`button` 类只说明需要在支持脚本的客户端执行。 | [ExploreMainRoute.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/feature/explore/ExploreMainRoute.kt)、[ExploreKind.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/data/entities/rule/ExploreKind.kt) | 13 项发现页 Widget 回归通过（两种模式、分组筛选、表单取值落库、脚本型规则提示、搜索面板）。 |
+| 书源管理与编辑面板 | 搜索 / 分组筛选 / 多选批量操作 / 置顶 / 导出到剪贴板 / 七分节编辑 + 原始 JSON 高级模式。 | [BookSourceViewModel.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/source/manage/BookSourceViewModel.kt) | 书源页 18 项 Widget 回归与编辑面板 9 项回归通过。 |
+| 换源作者过滤与字数排序 | 默认关闭作者过滤（与上游默认一致）；打开后重新搜索，因为过滤发生在收集候选阶段。 | [ChangeSourceSearchUseCase.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/domain/usecase/ChangeSourceSearchUseCase.kt) | 控制器与换源面板回归覆盖过滤生效、字数排序与设置持久化。 |
+| 并发率限速 | 按 `bookSourceUrl` 分量，`次数/毫秒` 或单数字；未声明或 `0` 不限速。 | [ConcurrentRateLimiter.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/help/ConcurrentRateLimiter.kt) | 限速器回归覆盖解析、串行放行、按源隔离与声明变更。 |
+
+### 真机验证（MuMu 安卓 15，1399 个真实书源）
+
+在模拟器上逐页走查后修掉六处偏差，均已带回归测试：
+
+1. 发现页分类格子按屏宽取 span，手机上默认 span 等于整行，格子被拉成通栏 —— 上游 `ExploreViewModel.kt:312` 与 `ExploreKindSelectSheet.kt:85` 都把每行上限写死 6，改为固定 6。
+2. 书源页的分组筛选行混入 `搜索链接规则为空`、`校验超时` 这类健康标签（书源行内已过滤，两个入口不一致）—— 过滤挪到 `AppController.sourceGroups`。
+3. 选择器引擎不支持的 CSS（`package:html` 会抛 `UnimplementedError` 而非 `FormatException`）被当成「网站失效」写回书源 —— `_querySelectorAll` 同时吞掉 `Exception` 与 `Error`，交回 fallback 分支机制。
+4. 写回 `bookSourceComment` 的 `// Error:` 备注里阶段名是英文 enum 名 —— 收进 `SourceHealthStage.label`，与面板共用同一份中文。
+5. 分组筛选把 79 个分组平铺成 chips，占掉十行屏幕 —— 按上游 `BookSourceScreen.kt:448` 的 `showGroupFilterSheet` 改成顶栏按钮 + 面板。
+6. 换源候选行的源级操作（置顶 / 置底 / 停用 / 删除）补齐。
+
+仍在真机验证范围之外：换源的停用与删除确认、内容模式翻页、`text` / `toggle` / `select` 类分类的实际交互、真实外部书源的整轮校验结论。
+
 ## 已识别的后续安全迁移能力（非上游完整功能清单）
 
 以下能力仍不受当前实现支持。其中能在安全边界内定义清晰语义的部分会作为后续增量单独设计、测试和验证；Cookie/WebView、未审查远程规则、DRM 绕过、代理绕过与广泛存储权限继续排除。未列出的 Legado 功能也不能据此视为已迁移。
 
-- 完整书源健康监控：当前已实现一次性、用户触发的四阶段脱敏检查；仍没有定时监控、后台重试、原始请求/响应调试记录、Cookie/登录会话或跨源诊断历史。不能把它当成上游完整 [CheckSourceBottomSheet](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/source/manage/CheckSourceBottomSheet.kt) 的逐项等价实现。
+- 完整书源健康监控：当前已实现一次性、用户触发的四阶段检查，结论会写回书源的 `respondTime`、分组标签与 `// Error:` 备注，并支持按书源 `concurrentRate` 限速；仍没有定时监控、后台重试、原始请求/响应调试记录、Cookie/登录会话或跨源诊断历史。不能把它当成上游完整 [CheckSourceBottomSheet](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/source/manage/CheckSourceBottomSheet.kt) 的逐项等价实现。
 - 本地目录扫描与无界导入：当前已从单文件扩展为用户明确选择的 1–5 个 TXT/EPUB 原子批次；仍不提供文件夹选择、递归扫描、后台任务、归档选项或广泛存储权限。不能把有限批量导入等同于上游 [ImportBookScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/import/local/ImportBookScreen.kt) 的完整设备导入功能。
 - 完整备份、远程书库与跨设备同步：当前可对既有安全本地子集做密码加密导出，但仍不导出网络书、书源规则、凭据或远程缓存，也不提供云同步、WebDAV、远程书库或加密密钥托管。不能把本地安全子集当成上游 [BackupConfigScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/config/backupConfig/BackupConfigScreen.kt)、[WebDAV 进度同步](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/data/repository/WebDavReadingProgressRepository.kt) 或 [RemoteBookScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/import/remote/RemoteBookScreen.kt) 的全量替代；端点密钥、远程保留、冲突与删除策略必须独立设计。
 - 跨设备与完整阅读历史：当前已提供有界本地章节里程碑，以及临时的事件/书籍筛选；仍不保留逐页浏览轨迹、不提供日期范围、统计、热力图或日历，不将活动同步或写入备份，也不持久化筛选条件。这些取舍避免持续追踪、网络同步和迁移文件膨胀，不能视为上游 [ReadRecordOverviewScreen](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/ui/book/readRecord/ReadRecordOverviewScreen.kt) 的完整统计能力等价。

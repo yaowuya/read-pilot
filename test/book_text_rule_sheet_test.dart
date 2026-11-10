@@ -40,7 +40,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byKey(const Key('book-text-rules')));
+    await tester.tap(find.byKey(const Key('book-more')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('book-text-rules')));
     await tester.pumpAndSettle();
   }

@@ -19,8 +19,11 @@ final class SourceCandidateInfo {
   final int? wordCount;
   final String? errorMessage;
 
-  /// Whether this candidate has everything needed to render an actionable
-  /// source-switch row. Candidates are never shown before this is true.
+  /// Whether the chapter mapping and word count are known yet.
+  ///
+  /// This is display detail only. A candidate row is listed as soon as its
+  /// source returned the title; switching loads the target catalog and reports
+  /// its own failure, so a missing summary must never hide the row.
   bool get isReadyForDisplay =>
       mappedChapterIndex != null &&
       mappedChapterTitle != null &&

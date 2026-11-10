@@ -183,8 +183,28 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  // 阅读页默认沉浸式，需要先点正文中部唤出工具栏才能操作顶栏与底栏。
+  /// 主题切换现在收在顶栏「更多」菜单里（设计稿 reader-more），
+  /// 测试里用这个帮助方法替代原来直点的 reader-theme-toggle 按钮。
+  Future<void> toggleThemeFromMoreMenu(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('reader-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-tool-theme')));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> showChrome(WidgetTester tester) async {
+    final body =
+        find.byKey(const Key('reader-paged-view')).evaluate().isNotEmpty
+        ? find.byKey(const Key('reader-paged-view'))
+        : find.byKey(const Key('reader-scrolling-view'));
+    await tester.tapAt(tester.getRect(body).center);
+    await tester.pumpAndSettle();
+  }
+
   Future<void> failLeaving(WidgetTester tester) async {
     await openReader(tester);
+    await showChrome(tester);
     final scroll = tester
         .widget<SingleChildScrollView>(find.byType(SingleChildScrollView).first)
         .controller!;
@@ -326,6 +346,71 @@ void main() {
     },
   );
 
+  testWidgets('reader chrome exposes 换源 and opens the source sheet', (
+    tester,
+  ) async {
+    // 用户要求：阅读中点中央唤出的菜单里要能直接换源（对齐 Legado）。
+    await openReader(tester);
+    await showChrome(tester);
+
+    final entry = find.byKey(const Key('reader-change-source'));
+    expect(entry, findsOneWidget);
+    expect(find.byTooltip('换源'), findsOneWidget);
+
+    await tester.tap(entry);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('换源'), findsOneWidget);
+    expect(find.byKey(const Key('source-switch-filter')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // 关掉面板后阅读页仍然可用（本套 fixture 默认是滚动阅读）。
+    Navigator.of(tester.element(entry)).pop();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-scrolling-view')), findsWidgets);
+  });
+
+  testWidgets('local books disable the reader 换源 entry', (tester) async {
+    // 内置离线书籍没有书源，入口应禁用而不是打开一个空面板。
+    await tester.runAsync(() async {
+      await controller.addBook(
+        Book(
+          id: 'local-only',
+          title: '本地书',
+          author: '作者',
+          description: '',
+          category: '公版',
+          coverStyle: 0,
+          sourceLabel: '内置',
+          addedAt: DateTime.utc(2026),
+          chapters: [
+            Chapter(
+              id: 'local-1',
+              title: '第一章',
+              url: 'local://local-only/1',
+              paragraphs: _paragraphs('Local'),
+            ),
+          ],
+        ),
+      );
+    });
+    await tester.pumpWidget(
+      ReadPilotApp(
+        key: UniqueKey(),
+        controller: controller,
+        initialRoute: '/read/local-only',
+      ),
+    );
+    await tester.pumpAndSettle();
+    await showChrome(tester);
+
+    final button = tester.widget<IconButton>(
+      find.byKey(const Key('reader-change-source')),
+    );
+    expect(button.onPressed, isNull);
+  });
+
   testWidgets('paged reader swipes and restores a logical paragraph anchor', (
     tester,
   ) async {
@@ -361,6 +446,7 @@ void main() {
     final saved = controller.book(_bookId)!.position.paragraphIndex;
     expect(saved, greaterThan(7));
 
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-back')));
     await tester.pumpAndSettle();
     await openReader(tester);
@@ -385,8 +471,19 @@ void main() {
     final anchor = controller.book(_bookId)!.position.paragraphIndex;
     final center = tester.getRect(paged).center;
 
+    // 进入阅读页默认沉浸式：先无工具栏，点中部才唤出。
+    expect(find.byKey(const Key('reader-back')), findsNothing);
+    expect(find.byKey(const Key('reader-settings')), findsNothing);
+    expect(find.byKey(const Key('reader-compact-heading')), findsOneWidget);
+    await tester.tapAt(center);
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('reader-back')), findsOneWidget);
     expect(find.byKey(const Key('reader-settings')), findsOneWidget);
+    expect(find.byKey(const Key('reader-compact-heading')), findsNothing);
+    expect(tester.widget<PageView>(paged).controller, same(pageController));
+    expect(pageController.page, page);
+    expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
+
     await tester.tapAt(center);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('reader-back')), findsNothing);
@@ -394,14 +491,6 @@ void main() {
     expect(find.byKey(const Key('reader-compact-heading')), findsOneWidget);
     expect(find.byKey(const Key('reader-reading-progress')), findsOneWidget);
     expect(find.textContaining(RegExp(r'^\d+/\d+$')), findsNothing);
-    expect(tester.widget<PageView>(paged).controller, same(pageController));
-    expect(pageController.page, page);
-    expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
-
-    await tester.tapAt(center);
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('reader-back')), findsOneWidget);
-    expect(find.byKey(const Key('reader-settings')), findsOneWidget);
     expect(tester.widget<PageView>(paged).controller, same(pageController));
     expect(pageController.page, page);
     expect(tester.takeException(), isNull);
@@ -420,9 +509,8 @@ void main() {
     final paged = find.byKey(const Key('reader-paged-view'));
     final pages = tester.widget<PageView>(paged).controller!;
     final viewport = tester.getRect(paged);
-    await tester.tapAt(viewport.center);
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('reader-reading-progress')), findsOneWidget);
+    // 默认即隐藏工具栏，边缘翻页不需要先唤出控件。
+    expect(find.byKey(const Key('reader-back')), findsNothing);
     await tester.tapAt(Offset(viewport.right - 12, viewport.center.dy));
     await tester.pumpAndSettle();
     expect(pages.page, 1);
@@ -440,15 +528,16 @@ void main() {
         .controller;
     await tester.drag(scrolling, const Offset(0, -180));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('reader-back')), findsOneWidget);
+    // 默认沉浸式：滚动后仍保持隐藏，中部点按才切换。
+    expect(find.byKey(const Key('reader-back')), findsNothing);
     final offset = scrollController!.offset;
     await tester.tapAt(tester.getRect(scrolling).center);
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('reader-back')), findsNothing);
+    expect(find.byKey(const Key('reader-back')), findsOneWidget);
     expect(scrollController.offset, offset);
     await tester.tapAt(tester.getRect(scrolling).center);
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('reader-back')), findsOneWidget);
+    expect(find.byKey(const Key('reader-back')), findsNothing);
     expect(scrollController.offset, offset);
     expect(tester.takeException(), isNull);
   });
@@ -457,13 +546,12 @@ void main() {
     'reading toolbar theme shortcut saves without moving the anchor',
     (tester) async {
       await openReader(tester);
+      await showChrome(tester);
       final anchor = controller.book(_bookId)!.position.paragraphIndex;
-      await tester.tap(find.byKey(const Key('reader-theme-toggle')));
-      await tester.pumpAndSettle();
+      await toggleThemeFromMoreMenu(tester);
       expect(controller.settings.theme, ReaderTheme.dark);
       expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
-      await tester.tap(find.byKey(const Key('reader-theme-toggle')));
-      await tester.pumpAndSettle();
+      await toggleThemeFromMoreMenu(tester);
       expect(controller.settings.theme, ReaderTheme.paper);
       expect(controller.book(_bookId)!.position.paragraphIndex, anchor);
       expect(tester.takeException(), isNull);
@@ -503,10 +591,12 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(pages.page, 1);
-    expect(find.byKey(const Key('reader-back')), findsOneWidget);
+    // 默认沉浸式，边缘翻页不会唤起工具栏。
+    expect(find.byKey(const Key('reader-back')), findsNothing);
 
     await tester.tapAt(rect.center);
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reader-back')), findsOneWidget);
     expect(pages.page, 1);
     await tester.tapAt(Offset(rect.left + 12, rect.center.dy));
     await tester.pumpAndSettle();
@@ -642,6 +732,9 @@ void main() {
     tester,
   ) async {
     await openReader(tester);
+    await showChrome(tester);
+    await tester.tap(find.byKey(const Key('reader-more')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-search')));
     await tester.pumpAndSettle();
     expect(find.text('仅检索已缓存的 1 / 2 章'), findsOneWidget);
@@ -668,6 +761,7 @@ void main() {
   ) async {
     engine.requests = 1;
     await openReader(tester);
+    await showChrome(tester);
     final originalIds = controller
         .book(_bookId)!
         .chapters
@@ -717,6 +811,7 @@ void main() {
         ),
       );
       await openReader(tester);
+      await showChrome(tester);
       final paged = find.byKey(const Key('reader-paged-view'));
       final pages = tester.widget<PageView>(paged).controller;
       await tester.tap(find.byTooltip('章节目录'));
@@ -735,6 +830,7 @@ void main() {
   testWidgets('reader preferences persist the selected flow', (tester) async {
     await openReader(tester);
     expect(find.byKey(const Key('reader-scrolling-view')), findsOneWidget);
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
 
@@ -751,6 +847,7 @@ void main() {
     (tester) async {
       engine.requests = 1;
       await openReader(tester);
+      await showChrome(tester);
       final pending = Completer<void>();
       repository.pendingSettingsWrite = pending;
       await tester.tap(find.byKey(const Key('reader-settings')));
@@ -897,14 +994,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(pages.page, 1);
 
-    await tester.tap(find.byKey(const Key('reader-theme-toggle')));
-    await tester.pumpAndSettle();
+    await showChrome(tester);
+    await toggleThemeFromMoreMenu(tester);
     expect(controller.settings.theme, ReaderTheme.dark);
     expect(tester.widget<PageView>(paged).controller, same(pages));
     expect(pages.page, 1);
 
-    await tester.tap(find.byKey(const Key('reader-theme-toggle')));
-    await tester.pumpAndSettle();
+    await toggleThemeFromMoreMenu(tester);
     expect(controller.settings.theme, ReaderTheme.sage);
     expect(tester.widget<PageView>(paged).controller, same(pages));
     expect(pages.page, 1);
@@ -929,8 +1025,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await showChrome(tester);
     expect(find.byKey(const Key('reader-settings')), findsOneWidget);
-    expect(find.byKey(const Key('reader-theme-toggle')), findsOneWidget);
+    expect(find.byKey(const Key('reader-more')), findsOneWidget);
     expect(
       find.descendant(
         of: find.byKey(const Key('reader-next')),
@@ -954,8 +1051,7 @@ void main() {
     await openReader(tester);
     final paged = find.byKey(const Key('reader-paged-view'));
     final pages = tester.widget<PageView>(paged).controller!;
-    await tester.tapAt(tester.getRect(paged).center);
-    await tester.pumpAndSettle();
+    // 默认沉浸式，隐藏工具栏时遇到加载失败也必须把控件暴露出来。
     expect(find.byKey(const Key('reader-back')), findsNothing);
 
     final nextChapterPage =
@@ -973,6 +1069,7 @@ void main() {
     tester,
   ) async {
     await openReader(tester);
+    await showChrome(tester);
     expect(controller.book(_bookId)!.position.paragraphIndex, 7);
     await tester.tap(find.byKey(const Key('reader-next')));
     await tester.pumpAndSettle();
@@ -1028,6 +1125,7 @@ void main() {
     tester,
   ) async {
     await openReader(tester);
+    await showChrome(tester);
     repository.failWrites = true;
     await tester.tap(find.byKey(const Key('reader-next')));
     await tester.pumpAndSettle();
@@ -1040,6 +1138,7 @@ void main() {
     tester,
   ) async {
     await openReader(tester);
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-next')));
     await tester.pumpAndSettle();
     expect(find.text('临时网络错误'), findsOneWidget);
@@ -1063,6 +1162,7 @@ void main() {
       );
     });
     await openReader(tester);
+    await showChrome(tester);
     repository.failWrites = true;
     await tester.tap(find.byKey(const Key('reader-next')));
     await tester.pumpAndSettle();
@@ -1095,7 +1195,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('reader-back')), findsNothing);
-    expect(find.text('我的书架'), findsOneWidget);
+    expect(find.byKey(const Key('shelf-title')), findsOneWidget);
   });
 
   testWidgets('marking a book finished reports storage failure', (
@@ -1110,6 +1210,7 @@ void main() {
       );
     });
     await openReader(tester);
+    await showChrome(tester);
     repository.failWrites = true;
     await tester.tap(find.byKey(const Key('reader-next')));
     await tester.pumpAndSettle();

@@ -73,7 +73,7 @@ void main() {
 
   testWidgets('empty timeline explains local-only retention', (tester) async {
     await pumpHistory(tester);
-    expect(find.text('阅读足迹'), findsOneWidget);
+    expect(find.text('阅读记录'), findsOneWidget);
     expect(find.textContaining('当前设备'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -90,7 +90,13 @@ void main() {
     );
     ReadingActivity? opened;
     await pumpHistory(tester, onOpen: (activity) => opened = activity);
-    expect(find.text('足迹书籍'), findsOneWidget);
+    // 设计稿把统计放在页首，足迹时间线在下方，需要先滚下去。
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('reading-history-item-0')),
+      220,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('足迹书籍'), findsWidgets);
     expect(find.text('第二章 · 阅读章节'), findsOneWidget);
     await tester.tap(find.byKey(const Key('reading-history-item-0')));
     expect(opened?.chapterIndex, 1);
@@ -122,8 +128,14 @@ void main() {
       );
     });
     await pumpHistory(tester);
-    expect(find.text('足迹书籍'), findsOneWidget);
-    expect(find.text('另一部足迹书'), findsOneWidget);
+    // 页首的「最近在读」也会显示书名，所以要滚到时间线里的具体行。
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('reading-history-item-1')),
+      220,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('足迹书籍'), findsWidgets);
+    expect(find.text('另一部足迹书'), findsWidgets);
 
     await tester.tap(find.byKey(const Key('history-kind-finished')));
     await tester.pumpAndSettle();
@@ -137,7 +149,12 @@ void main() {
     await tester.tap(find.byKey(const Key('history-book-option-history-ui')));
     await tester.pumpAndSettle();
 
-    expect(find.text('足迹书籍'), findsNWidgets(2));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('reading-history-item-0')),
+      220,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('足迹书籍'), findsWidgets);
     expect(find.text('另一部足迹书'), findsNothing);
     expect(controller.readingActivities, hasLength(2));
     expect(tester.takeException(), isNull);

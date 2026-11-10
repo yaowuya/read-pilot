@@ -24,6 +24,17 @@ void main() {
     await database.close();
   });
 
+  // 阅读页默认沉浸式，操作顶栏/底栏前需先点正文中部唤出工具栏。
+  Future<void> showChrome(WidgetTester tester) async {
+    if (find.byKey(const Key('reader-settings')).evaluate().isNotEmpty) return;
+    final paged = find.byKey(const Key('reader-paged-view'));
+    final body = paged.evaluate().isNotEmpty
+        ? paged
+        : find.byKey(const Key('reader-scrolling-view'));
+    await tester.tapAt(tester.getRect(body).center);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('explicit auto read advances one paged reader and can stop', (
     tester,
   ) async {
@@ -39,6 +50,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // 页码指示器只随工具栏显示，先唤出工具栏再读取当前页。
+    await showChrome(tester);
     final indicator = find.byKey(const Key('reader-page-indicator'));
     expect(indicator, findsOneWidget);
     final before = tester.widget<Text>(indicator).data;
@@ -53,6 +66,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(tester.widget<Text>(indicator).data, isNot(before));
+    await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('reader-auto-read')));
@@ -77,6 +91,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await showChrome(tester);
     final indicator = find.byKey(const Key('reader-page-indicator'));
     final before = tester.widget<Text>(indicator).data;
 

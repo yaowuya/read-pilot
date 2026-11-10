@@ -9,6 +9,7 @@ import 'package:read_pilot/application/app_controller.dart';
 import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
 import 'package:read_pilot/domain/book_source.dart';
+import 'package:read_pilot/domain/change_source_settings.dart';
 import 'package:read_pilot/domain/reader_settings.dart';
 import 'package:read_pilot/domain/source_import.dart';
 import 'package:read_pilot/domain/source_switch_candidate.dart';
@@ -55,6 +56,7 @@ class _SwitchSourceEngine extends SourceEngine {
   Future<void>? loadBookAbortTrigger;
   Future<void>? loadChapterAbortTrigger;
   final chapterRequests = <String>[];
+  final chaptersBySourceId = <String, Chapter>{};
 
   @override
   Future<List<Book>> search(
@@ -102,7 +104,9 @@ class _SwitchSourceEngine extends SourceEngine {
     if (source.id == delayedSourceId && delayedChapter != null) {
       return delayedChapter!.future;
     }
-    return loadedChapter ?? chapter.withParagraphs(const ['新正文']);
+    return chaptersBySourceId[source.id] ??
+        loadedChapter ??
+        chapter.withParagraphs(const ['新正文']);
   }
 
   @override
@@ -390,22 +394,25 @@ void main() {
     expect((await controller.repository.sources()).single.name, '网络导入源');
   });
 
-  test('multi-source search runs at most four sources concurrently', () async {
-    controller.dispose();
-    final engine = _ConcurrencySourceEngine();
-    controller = AppController(AppRepository(database), engine);
-    await controller.initialize();
-    await controller.importSources(
-      jsonEncode([
-        for (var index = 0; index < 7; index++) _searchSource(index),
-      ]),
-    );
+  test(
+    'multi-source search runs at most sixteen sources concurrently',
+    () async {
+      controller.dispose();
+      final engine = _ConcurrencySourceEngine();
+      controller = AppController(AppRepository(database), engine);
+      await controller.initialize();
+      await controller.importSources(
+        jsonEncode([
+          for (var index = 0; index < 19; index++) _searchSource(index),
+        ]),
+      );
 
-    final groups = await controller.searchSources('测试');
+      final groups = await controller.searchSources('测试');
 
-    expect(groups, hasLength(7));
-    expect(engine.peak, 4);
-  });
+      expect(groups, hasLength(19));
+      expect(engine.peak, 16);
+    },
+  );
 
   test('cancelling search prevents queued sources from starting', () async {
     controller.dispose();
@@ -414,7 +421,7 @@ void main() {
     await controller.initialize();
     await controller.importSources(
       jsonEncode([
-        for (var index = 0; index < 20; index++) _searchSource(index),
+        for (var index = 0; index < 40; index++) _searchSource(index),
       ]),
     );
     final abort = Completer<void>();
@@ -424,8 +431,8 @@ void main() {
     abort.complete();
     final groups = await pending;
 
-    expect(engine.started, 4);
-    expect(groups, hasLength(4));
+    expect(engine.started, 16);
+    expect(groups, hasLength(16));
   });
 
   test(
@@ -547,7 +554,7 @@ void main() {
   );
 
   test(
-    'streams a candidate only after its chapter and word count are ready',
+    'streams a candidate before its chapter and word count are ready',
     () async {
       controller.dispose();
       final engine = _SwitchSourceEngine();
@@ -599,14 +606,22 @@ void main() {
         const Duration(seconds: 1),
       );
       try {
-        // A visible candidate is actionable, so it must not arrive before the
-        // mapped chapter and word count are available.
-        expect(partial.infoFor(candidate)?.mappedChapterTitle, '第一章');
-        expect(partial.infoFor(candidate)?.wordCount, 4);
+        // A source returning this title is enough to list a switchable row: the
+        // mapped chapter and word count are decoration that arrives later, so
+        // they must never gate the list while a long search is still running.
+        expect(
+          partial.candidates.map((book) => book.id),
+          contains(candidate.id),
+        );
+        expect(partial.infoFor(candidate), isNull);
       } finally {
         if (!delayedSearch.isCompleted) delayedSearch.complete(const []);
-        await search;
       }
+
+      final found = await search;
+
+      expect(found.infoFor(candidate)?.mappedChapterTitle, '第一章');
+      expect(found.infoFor(candidate)?.wordCount, 4);
     },
   );
 
@@ -744,12 +759,12 @@ void main() {
 
     final finding = controller.findSourceCandidatesFor(current);
     await engine.metadataStarted.future;
-    // 12 admitted metadata jobs plus four scheduler workers blocked on the
-    // next admission, and the ignored current source: no unbounded 40-source
-    // search can run ahead while the first three catalog loads are paused.
+    // Catalog loads are the heaviest request a switch issues, so they stay
+    // capped and their backlog bounded: however many sources answer at once,
+    // only the admitted jobs may run while the gate is closed.
     await Future<void>.delayed(Duration.zero);
-    expect(engine.metadataLoads, 3);
-    expect(engine.searchStarted, lessThanOrEqualTo(17));
+    expect(engine.metadataLoads, lessThanOrEqualTo(24));
+    expect(engine.searchStarted, lessThanOrEqualTo(40));
 
     gate.complete();
     final found = await finding;
@@ -1115,7 +1130,10 @@ void main() {
     final incomplete = await controller.reloadSourceCandidatesFor(current);
     expect(incomplete.hasCompleteCandidateResults, isFalse);
     expect(incomplete.unavailableCandidateSourceIds, contains(candidateSource));
-    expect(incomplete.candidates, isEmpty);
+    // A metadata failure costs the row its chapter and word count, not the row:
+    // the source still returned this title, so it stays a switchable target.
+    expect(incomplete.candidates.map((book) => book.id), [candidate.id]);
+    expect(incomplete.infoFor(candidate), isNull);
 
     // Read the raw snapshot: the display accessor deliberately filters some
     // entries, whereas this verifies a metadata failure cannot overwrite it.
@@ -1256,7 +1274,76 @@ void main() {
     },
   );
 
+  test('switches source for a remote book that is not on the shelf', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([_searchSource(0), _searchSource(1)]),
+    );
+    const oldSource = 'https://source-0.example';
+    const otherSource = 'https://source-1.example';
+    final searched = _remoteBook(
+      id: 'search-result',
+      sourceId: oldSource,
+      sourceLabel: 'Source 0',
+    );
+    final candidate = _remoteBook(
+      id: 'mirrored-result',
+      sourceId: otherSource,
+      sourceLabel: 'Source 1',
+    );
+    engine.results[otherSource] = [candidate];
+    engine.loadedBook = candidate;
 
+    // 还没上架的书也能先比较候选书源。
+    final found = await controller.findSourceCandidatesFor(searched);
+    expect(found.candidates.map((book) => book.id), ['mirrored-result']);
+    // 按 id 查候选仍然只认书架上的书。
+    expect(
+      (await controller.findSourceCandidates(searched.id)).candidates,
+      isEmpty,
+    );
+
+    final switched = await controller.switchBookSource(searched.id, candidate);
+    expect(switched.sourceId, otherSource);
+    expect(switched.sourceLabel, 'Source 1');
+    // 未上架的书换源只换内存里的对象，不该悄悄写进书架。
+    expect(controller.book(searched.id), isNull);
+    expect(
+      (await controller.repository.books()).where(
+        (book) => book.id == searched.id,
+      ),
+      isEmpty,
+    );
+  });
+
+  test('rejects switching a non-shelf book onto an unknown source', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(jsonEncode([_searchSource(0)]));
+
+    await expectLater(
+      () => controller.switchBookSource(
+        'missing',
+        _remoteBook(
+          id: 'orphan',
+          sourceId: 'https://not-imported.example',
+          sourceLabel: '不存在',
+        ),
+      ),
+      throwsA(
+        isA<SourceException>().having(
+          (error) => error.message,
+          'message',
+          '书源已移除。已缓存章节仍可阅读，获取新章节需重新导入书源。',
+        ),
+      ),
+    );
+  });
 
   test(
     'failed source-switch persistence never publishes replacement state',
@@ -1378,7 +1465,6 @@ void main() {
       expect(engine.chapterRequests, [candidate.chapters.first.id]);
     },
   );
-
 
   test(
     'source switch rejects a target source deleted while it loads',
@@ -1617,6 +1703,106 @@ void main() {
     );
   }
 
+  test('作者过滤只保留作者包含关系一致的候选', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+    );
+    const currentSource = 'https://source-0.example';
+    final current = _remoteBook(
+      id: 'author-current',
+      sourceId: currentSource,
+      sourceLabel: 'Source 0',
+      author: '天蚕土豆',
+    );
+    final sameAuthor = _remoteBook(
+      id: 'same-author',
+      sourceId: 'https://source-1.example',
+      sourceLabel: 'Source 1',
+      author: '天蚕土豆 著',
+    );
+    final otherAuthor = _remoteBook(
+      id: 'other-author',
+      sourceId: 'https://source-2.example',
+      sourceLabel: 'Source 2',
+      author: '另一作者',
+    );
+    engine.results['https://source-1.example'] = [sameAuthor];
+    engine.results['https://source-2.example'] = [otherAuthor];
+
+    // 默认关闭：同名不同作者也算候选，由用户自己判断。
+    final unfiltered = await controller.findSourceCandidatesFor(current);
+    expect(unfiltered.candidates.map((book) => book.id), [
+      'same-author',
+      'other-author',
+    ]);
+
+    await controller.updateChangeSourceSettings(
+      const ChangeSourceSettings(checkAuthor: true),
+    );
+    // Legado 用 contains 而非相等：各家书源会在作者后面加“著”之类的尾巴。
+    final filtered = await controller.findSourceCandidatesFor(current);
+    expect(filtered.candidates.map((book) => book.id), ['same-author']);
+  });
+
+  test('按字数排序把内容更完整的候选排在前面', () async {
+    controller.dispose();
+    final engine = _SwitchSourceEngine();
+    controller = AppController(AppRepository(database), engine);
+    await controller.initialize();
+    await controller.importSources(
+      jsonEncode([_searchSource(0), _searchSource(1), _searchSource(2)]),
+    );
+    const currentSource = 'https://source-0.example';
+    final current = _remoteBook(
+      id: 'word-current',
+      sourceId: currentSource,
+      sourceLabel: 'Source 0',
+    );
+    final shortSource = _remoteBook(
+      id: 'short-candidate',
+      sourceId: 'https://source-1.example',
+      sourceLabel: 'Source 1',
+    );
+    final longSource = _remoteBook(
+      id: 'long-candidate',
+      sourceId: 'https://source-2.example',
+      sourceLabel: 'Source 2',
+    );
+    engine.results['https://source-1.example'] = [shortSource];
+    engine.results['https://source-2.example'] = [longSource];
+    engine.chaptersBySourceId['https://source-1.example'] = Chapter(
+      id: 'source-1/chapter',
+      title: '第一章',
+      url: 'source-1/chapter',
+      paragraphs: const ['短'],
+    );
+    engine.chaptersBySourceId['https://source-2.example'] = Chapter(
+      id: 'source-2/chapter',
+      title: '第一章',
+      url: 'source-2/chapter',
+      paragraphs: const ['这句话明显要长得多，足以让字数排序把这一行排到前面去。'],
+    );
+
+    // 默认按书源顺序，两个字数是 1 vs 25，但顺序仍由 origin 决定。
+    final ordered = await controller.findSourceCandidatesFor(current);
+    expect(ordered.candidates.first.id, 'short-candidate');
+    final shortWords = ordered.infoFor(shortSource)?.wordCount ?? 0;
+    final longWords = ordered.infoFor(longSource)?.wordCount ?? 0;
+    expect(shortWords, 1);
+    expect(longWords, greaterThan(shortWords));
+
+    // 打开字数排序后，内容更完整的那一本排到第一行。
+    await controller.updateChangeSourceSettings(
+      const ChangeSourceSettings(sortByWordCount: true),
+    );
+    final sorted = await controller.findSourceCandidatesFor(current);
+    expect(sorted.candidates.first.id, 'long-candidate');
+  });
+
   test('late chapter load cannot publish after a source switch', () async {
     controller.dispose();
     final engine = _SwitchSourceEngine()
@@ -1697,6 +1883,44 @@ void main() {
     expect(controller.sources, isEmpty);
     expect(await controller.repository.sources(), isEmpty);
   });
+
+  test(
+    'editing a source url replaces the record instead of copying it',
+    () async {
+      await controller.importSources(
+        jsonEncode([
+          {
+            'bookSourceUrl': 'https://before.example',
+            'bookSourceName': '改址书源',
+            'searchUrl': '/search?q={{key}}',
+            'ruleSearch': {
+              'bookList': '@CSS:.book',
+              'name': '@CSS:a@text',
+              'bookUrl': '@CSS:a@href',
+            },
+          },
+        ]),
+      );
+      final before = controller.sources.single;
+
+      await controller.updateSource(
+        before.withName('改址书源').withFields({
+          'bookSourceUrl': 'https://after.example',
+        }),
+        previousId: before.id,
+      );
+
+      expect(controller.sources.map((source) => source.id), [
+        'https://after.example',
+      ]);
+      expect(await controller.repository.sources(), hasLength(1));
+      expect(
+        await controller.repository.sourceState('https://before.example'),
+        isNull,
+        reason: '旧地址的导入记录也应该一并清掉',
+      );
+    },
+  );
 
   test('settings and bookmark actions update durable state', () async {
     await controller.updateSettings(

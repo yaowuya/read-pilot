@@ -4,11 +4,15 @@ import 'package:sembast/sembast.dart';
 
 import '../domain/book.dart';
 import '../domain/book_source.dart';
+import '../domain/change_source_settings.dart';
+import '../domain/explore_kind.dart';
 import '../domain/reader_settings.dart';
 import '../domain/reader_style_preset.dart';
 import '../domain/reader_mark.dart';
 import '../domain/reading_activity.dart';
 import '../domain/shelf_group.dart';
+import '../domain/source_check_settings.dart';
+import '../domain/source_health.dart';
 import '../domain/source_import.dart';
 import '../domain/source_switch_candidate.dart';
 import '../services/book_text_rules.dart';
@@ -32,6 +36,7 @@ class AppRepository {
   );
   final _sources = stringMapStoreFactory.store('sources');
   final _sourceStates = stringMapStoreFactory.store('source_state');
+  final _sourceExploreInfo = stringMapStoreFactory.store('source_explore_info');
   final _sourceSwitchCandidateCaches = stringMapStoreFactory.store(
     'source_switch_candidate_cache',
   );
@@ -720,6 +725,57 @@ class AppRepository {
     await _meta.record('settings').put(database, settings.toJson());
   }
 
+  Future<ChangeSourceSettings> changeSourceSettings() async =>
+      ChangeSourceSettings.fromJson(
+        Map<String, dynamic>.from(
+          await _meta.record('change_source_settings').get(database) ?? {},
+        ),
+      );
+
+  Future<void> saveChangeSourceSettings(ChangeSourceSettings settings) async {
+    await _meta
+        .record('change_source_settings')
+        .put(database, settings.toJson());
+  }
+
+  /// What a book-source health check is allowed to probe.
+  ///
+  /// Legado keeps this in its own settings repository; storing it beside the
+  /// reader and 换源 preferences keeps every user-tunable value in one place.
+  Future<SourceCheckSettings> sourceCheckSettings() async =>
+      SourceCheckSettings.fromJson(
+        Map<String, dynamic>.from(
+          await _meta.record('source_check_settings').get(database) ?? {},
+        ),
+      );
+
+  Future<void> saveSourceCheckSettings(SourceCheckSettings settings) async {
+    await _meta
+        .record('source_check_settings')
+        .put(database, settings.toJson());
+  }
+
+  /// Writes one health-check verdict back onto the source record.
+  ///
+  /// Legado has no separate health table: `BookSourceCheckRepository` clears the
+  /// old verdict, then stores `respondTime`, adds the failing stage tags to
+  /// `bookSourceGroup` and prepends a `// Error:` block to `bookSourceComment`.
+  /// Doing the same keeps the source row honest across restarts instead of
+  /// throwing the diagnosis away when the sheet closes.
+  Future<BookSource> recordSourceHealth({
+    required BookSource source,
+    required SourceHealthReport report,
+  }) async {
+    var updated = source.removeInvalidGroups().removeErrorComment();
+    updated = updated.withRespondTime(report.respondTimeMillis);
+    final tags = report.tags;
+    if (tags.isNotEmpty) updated = updated.addGroups(tags);
+    final failure = report.failureSummary;
+    if (failure != null) updated = updated.addErrorComment(failure);
+    await replaceSource(updated);
+    return updated;
+  }
+
   static String _stylePresetName(String value) {
     final name = value.trim().replaceAll(RegExp(r'\s+'), ' ');
     if (name.isEmpty || name.runes.length > 24) {
@@ -1206,10 +1262,32 @@ class AppRepository {
     });
   }
 
-  Future<List<BookSource>> sources() async => [
-    for (final record in await _sources.find(database))
-      BookSource(Map<String, dynamic>.from(record.value)),
-  ];
+  /// 所有书源，按 `customOrder` 从小到大排列。
+  ///
+  /// 排序在 Dart 侧完成而不是交给 sembast 的 [SortOrder]：导入的原始 JSON 常常
+  /// 没有 `customOrder` 这个键，sembast 会把缺字段的记录当成最小/最大之外的值，
+  /// 于是「置顶」写进去的负数反而排到最后。这里统一按 legado 的语义——缺字段就是
+  /// 0——并在值相同时保留 `sources` 的原始顺序（Dart 的 [List.sort] 不稳定，
+  /// 所以显式带上索引）。
+  Future<List<BookSource>> sources() async {
+    final records = await _sources.find(database);
+    final order = <String, int>{
+      for (final record in records)
+        record.key: _customOrder(record.value['customOrder']),
+    };
+    final sorted = records.toList();
+    final index = <String, int>{
+      for (var i = 0; i < sorted.length; i++) sorted[i].key: i,
+    };
+    sorted.sort((a, b) {
+      final byOrder = order[a.key]!.compareTo(order[b.key]!);
+      return byOrder != 0 ? byOrder : index[a.key]!.compareTo(index[b.key]!);
+    });
+    return [
+      for (final record in sorted)
+        BookSource(Map<String, dynamic>.from(record.value)),
+    ];
+  }
 
   Future<void> saveSources(List<BookSource> sources) async {
     await database.transaction((transaction) async {
@@ -1277,6 +1355,163 @@ class AppRepository {
 
   Future<void> setSourceEnabled(String id, bool enabled) async {
     await _sources.record(id).update(database, {'enabled': enabled});
+  }
+
+  /// Toggles a source's participation in the discover page without touching
+  /// [BookSource.enabled], which governs search and 换源.
+  Future<void> setSourceEnabledExplore(String id, bool enabledExplore) async {
+    await _sources.record(id).update(database, {
+      'enabledExplore': enabledExplore,
+    });
+  }
+
+  /// Moves [id] above every other source by taking the current minimum order and
+  /// subtracting one, matching legado's `topSource`.
+  ///
+  /// Returns the saved source, or null when the id is not installed.
+  Future<BookSource?> moveSourceToTop(String id) async {
+    BookSource? target;
+    int? minOrder;
+    for (final record in await _sources.find(database)) {
+      final order = _customOrder(record.value['customOrder']);
+      if (record.key == id) {
+        target = BookSource(Map<String, dynamic>.from(record.value));
+        continue;
+      }
+      if (minOrder == null || order < minOrder) minOrder = order;
+    }
+    final resolved = target;
+    if (resolved == null) return null;
+    // First source installed: keep legado's 0 baseline instead of going negative.
+    final next = resolved.withCustomOrder((minOrder ?? 0) - 1);
+    await saveSource(next);
+    return next;
+  }
+
+  /// Moves [id] below every other source by taking the current maximum order and
+  /// adding one, matching legado's `bottomSource`.
+  ///
+  /// Returns the saved source, or null when the id is not installed.
+  Future<BookSource?> moveSourceToBottom(String id) async {
+    BookSource? target;
+    int? maxOrder;
+    for (final record in await _sources.find(database)) {
+      final order = _customOrder(record.value['customOrder']);
+      if (record.key == id) {
+        target = BookSource(Map<String, dynamic>.from(record.value));
+        continue;
+      }
+      if (maxOrder == null || order > maxOrder) maxOrder = order;
+    }
+    final resolved = target;
+    if (resolved == null) return null;
+    final next = resolved.withCustomOrder((maxOrder ?? 0) + 1);
+    await saveSource(next);
+    return next;
+  }
+
+  static int _customOrder(Object? value) {
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim()) ?? 0;
+    return 0;
+  }
+
+  /// Replaces one source record wholesale after an edit.
+  ///
+  /// The record key is the source URL and the URL is the primary key in legado
+  /// too, so an edit that changes it must delete the old record; callers that
+  /// only change editable fields can rely on this method instead.
+  Future<void> replaceSource(BookSource source) async {
+    await _sources.record(source.id).put(database, source.toJson());
+  }
+
+  /// Removes several sources in one transaction.
+  Future<void> deleteSources(Iterable<String> ids) async {
+    for (final id in ids) {
+      await deleteSource(id);
+    }
+  }
+
+  /// Stored discover form values for one source, keyed by kind title.
+  Future<Map<String, String>> exploreInfo(String sourceId) async {
+    final json = await _sourceExploreInfo.record(sourceId).get(database);
+    if (json == null) return {};
+    return {
+      for (final entry in json.entries)
+        if (entry.value is String) entry.key: entry.value as String,
+    };
+  }
+
+  Future<void> saveExploreInfo(
+    String sourceId,
+    Map<String, String> values,
+  ) async {
+    if (values.isEmpty) {
+      await _sourceExploreInfo.record(sourceId).delete(database);
+      return;
+    }
+    await _sourceExploreInfo.record(sourceId).put(database, values);
+  }
+
+  /// Last discover source and category per source, mirroring legado's
+  /// `exploreMainSourceUrl` + `exploreMainKind` preferences.
+  Future<ExploreMainSelection> exploreSelection() async {
+    final json = await _meta.record('explore_selection').get(database);
+    return ExploreMainSelection(
+      sourceUrl: json?['sourceUrl'] is String
+          ? json!['sourceUrl'] as String
+          : null,
+      kindKeyBySource: {
+        if (json?['kindKeyBySource'] is Map)
+          for (final entry in (json!['kindKeyBySource'] as Map).entries)
+            if (entry.value is String)
+              entry.key.toString(): entry.value as String,
+      },
+      showContent: json?['showContent'] == true,
+    );
+  }
+
+  Future<void> saveExploreSelection(ExploreMainSelection selection) async {
+    await _meta.record('explore_selection').put(database, {
+      if (selection.sourceUrl != null) 'sourceUrl': selection.sourceUrl,
+      'kindKeyBySource': selection.kindKeyBySource,
+      'showContent': selection.showContent,
+    });
+  }
+
+  /// Recent search keywords, newest first, capped at [maxSearchHistory].
+  ///
+  /// Legado keeps the same list in `searchHistory` preferences. It is small,
+  /// purely local and cheap to rewrite, so a single meta record is enough —
+  /// no separate store and no index.
+  static const maxSearchHistory = 12;
+
+  Future<List<String>> searchHistory() async {
+    final json = await _meta.record('search_history').get(database);
+    final entries = json?['entries'];
+    if (entries is! List) return const [];
+    return [
+      for (final entry in entries)
+        if (entry is String && entry.trim().isNotEmpty) entry,
+    ];
+  }
+
+  Future<List<String>> rememberSearch(String keyword) async {
+    final trimmed = keyword.trim();
+    if (trimmed.isEmpty) return searchHistory();
+    final current = await searchHistory();
+    final next = <String>[
+      trimmed,
+      for (final item in current)
+        if (item != trimmed) item,
+    ];
+    final capped = next.take(maxSearchHistory).toList();
+    await _meta.record('search_history').put(database, {'entries': capped});
+    return capped;
+  }
+
+  Future<void> clearSearchHistory() async {
+    await _meta.record('search_history').delete(database);
   }
 
   Future<void> deleteSource(String id) async {

@@ -136,6 +136,14 @@ class RequestPlanner {
     _ => value,
   };
 
+  /// Replaces `{{name}}` placeholders with request variables.
+  ///
+  /// Legado resolves `{{...}}` as JavaScript, which is why a discover category's
+  /// info-map values can reach its URL; this runtime has no script engine, so it
+  /// resolves the same placeholders from [variables] instead. Any name present in
+  /// [variables] is accepted — the info map names are chosen by the source, not
+  /// by this app — while `baseUrl` always expands to the source URL and a name
+  /// nobody supplied is a real error rather than a silent empty string.
   String _expand(
     String value,
     BookSource source,
@@ -144,11 +152,17 @@ class RequestPlanner {
     String charset = 'utf-8',
   }) => value.replaceAllMapped(RegExp(r'\{\{(.*?)\}\}'), (match) {
     final name = match[1]!.trim();
+    if (name.isEmpty) {
+      throw const SourceRuntimeException(
+        SourceRuntimeErrorKind.invalidRule,
+        '模板表达式 {{}} 缺少变量名。',
+      );
+    }
     final raw = name == 'baseUrl' ? source.id : variables[name];
-    if (!{'key', 'page', 'baseUrl'}.contains(name) || raw == null) {
+    if (raw == null) {
       throw SourceRuntimeException(
         SourceRuntimeErrorKind.unsupportedCapability,
-        '模板表达式 {{$name}} 尚未实现。',
+        '模板表达式 {{$name}} 缺少变量。',
       );
     }
     final text = raw.toString();

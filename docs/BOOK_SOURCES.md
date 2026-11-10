@@ -5,14 +5,14 @@
 ## 支持
 
 - JSON 对象或对象数组；规则组也可为编码后的 JSON 对象字符串。未知字段保留并可往返序列化；空的 `ruleReview: []` 兼容为缺省评论规则，非空数组仍拒绝。
-- `bookSourceUrl`、`bookSourceName`、0–4 类型和 `enabled` 可保留；当前阅读流程面向文本书源。`enabled` 省略时默认启用，提供时必须是 JSON 布尔值，字符串 `"false"` 等错误类型会拒绝。
+- `bookSourceUrl`、`bookSourceName`、0–4 类型和 `enabled` 可保留；当前阅读流程面向文本书源。`enabled` 省略时默认启用，提供时必须是 JSON 布尔值，字符串 `"false"` 等错误类型会拒绝。`bookSourceGroup`（用 `[,;，；]` 切分的多个分组）、`bookSourceComment`、`customOrder` 和 `enabledExplore` 同样有真实语义：分组参与发现页筛选，`customOrder` 决定书源列表顺序，`enabledExplore` 单独控制是否出现在发现页。
 - CSS、已实现的 legacy 选择器、`@text` / `@ownText` / `@textNodes` / `@html` 和属性提取；安全 XPath 子集、JSONPath、有界正则替换及 `||` fallback 的范围见兼容矩阵。
 - HTTP(S) GET/POST/HEAD、form/JSON/raw 请求体、静态及 URL option headers、UTF-8/GBK 编解码；不把格式可解析等同于任意请求或脚本均可运行。
-- 搜索、发现、详情、目录和正文；目录/正文各最多读取 10 页，每本书最多 10,000 个有效唯一章节。超限会明确拒绝，不保存静默截断的目录。
-- 搜索模板中的 `{{key}}`、`{{page}}`、`{{baseUrl}}` 按声明式规则展开；任意表达式不因此获准执行。Android 已有的限定脚本入口另按平台许可及沙箱规则处理。
+- 搜索、发现、详情、目录和正文；目录最多翻 500 页，连续 10 页没有解析到新章节即视为已到底，到达上限时保留已解析的目录继续阅读，不整本书报错；正文最多读 50 页，到上限保留已取到的正文继续阅读，不整章报错；每本书最多 10,000 个有效唯一章节，超过章节上限同样明确拒绝，不保存静默截断的目录。
+- 搜索模板中的 `{{key}}`、`{{page}}`、`{{baseUrl}}` 按声明式规则展开；书源发现分类里的表单项（`text`/`toggle`/`select`）取值同样以变量形式进入 URL，因此 `{{自定义名}}` 会解析成该页面保存的值。任意表达式不因此获准执行。Android 已有的限定脚本入口另按平台许可及沙箱规则处理。
 - 相对链接以实际响应地址解析；搜索、详情、目录、正文和封面请求，以及每次重定向，都必须满足书源的同源策略和地址检查。默认拒绝本机、私网及不安全目标，不使用公共代理绕过限制。
 - HTML 最大深度 128 层、最多 50,000 节点；JSON DOM 最多 25,000 节点、深度 128。过度嵌套或展开过大的页面会报错，不继续解析。
-- 已缓存章节可离线阅读；不会自动抓取整站或全书。粘贴、文件与网络 JSON 导入共用 10 MiB、500 个源及 JSON 深度 64 的限制，一次确认后校验并原子提交，不展示预览列表。
+- 已缓存章节可离线阅读；不会自动抓取整站或全书。粘贴、文件与网络 JSON 导入共用 100 MiB、10,000 个源及 JSON 深度 64 的限制；聚合书源里个别无法解析的条目会被跳过并在预览中按原因计数，但整批不可解析、超过条目上限或结构损坏仍整体拒绝。检查阶段不写库，用户明确选择来源子集后一次原子提交。
 
 ## 正文段落与替换
 
@@ -63,7 +63,7 @@ Android 已有的 `searchUrl <js>` 与 `ruleContent @js:` 仅在受限 QuickJS w
 
 ## 网络与隐私
 
-请求 15 秒超时、最多 4 次重定向、单次最多 2 MiB；不允许 `file:`、`javascript:` 或任意原生代码桥。单次导入 JSON 限制 10 MiB。HTTPS 优先；HTTP 仅用于用户明确授权且满足地址策略的网络内容，不因此允许本机或私网访问。Web 运行时仍受浏览器 CORS 约束：来源必须允许应用的 Origin。不要关闭浏览器安全策略；没有“万能代理”。
+请求 15 秒超时、最多 4 次重定向、单次最多 2 MiB；不允许 `file:`、`javascript:` 或任意原生代码桥。单次导入 JSON 限制 100 MiB。书源声明的 `concurrentRate`（`次数/毫秒`，或单数字等价 `1/毫秒`）按 `bookSourceUrl` 限速，搜索、发现、封面、目录与正文共用同一份额度；未声明或为 `0` 时不限速。HTTPS 优先；HTTP 仅用于用户明确授权且满足地址策略的网络内容，不因此允许本机或私网访问。Web 运行时仍受浏览器 CORS 约束：来源必须允许应用的 Origin。不要关闭浏览器安全策略；没有“万能代理”。
 
 书源配置、本地书籍、笔记和阅读进度存储在本机。Web 使用 IndexedDB，清理站点数据会删除阅读数据；首版没有跨设备同步与数据导出备份，重要原始 TXT 请自行保留。
 
@@ -75,6 +75,8 @@ Android 已有的 `searchUrl <js>` 与 `ruleContent @js:` 仅在受限 QuickJS w
 - [rule 数据结构](https://github.com/HapeLee/legado-with-MD3/tree/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/data/entities/rule)
 - [AnalyzeByJSoup.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/model/analyzeRule/AnalyzeByJSoup.kt)
 - [AnalyzeUrl.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/model/analyzeRule/AnalyzeUrl.kt)
+- [ExploreKind.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/data/entities/rule/ExploreKind.kt)
+- [BookSourceCheckRepository.kt](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/app/src/main/java/io/legado/app/data/repository/BookSourceCheckRepository.kt)
 - [上游 GPL-3.0 许可证](https://github.com/HapeLee/legado-with-MD3/blob/b21025d3769ec9c4028514914f3c555a1ba284b8/LICENSE)
 
 如果后续复制或移植上游实现，必须重新评估 GPLv3 对整合作品及分发的要求，不能把“独立实现”的当前说明用于复制后的代码。正式发布还需对书籍授权、站点服务条款和分发地区版权作独立核查。

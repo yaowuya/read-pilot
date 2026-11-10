@@ -42,12 +42,13 @@ final class ReaderPalette {
     errorBackground: Color(0xFFFFEDEA),
     errorInk: Color(0xFF831C1E),
   );
+  // 设计稿指定的夜间配色（背景 #202225 / 正文 #C3C0B8）。
   static const _dark = ReaderPalette._(
     label: '夜间',
     brightness: Brightness.dark,
-    background: Color(0xFF1D1D1D),
-    ink: Color(0xFFD8D6D1),
-    muted: Color(0xFFAEACA7),
+    background: Color(0xFF202225),
+    ink: Color(0xFFC3C0B8),
+    muted: Color(0xFF8B8D8F),
     errorBackground: Color(0xFF2C1A20),
     errorInk: Color(0xFFE5566F),
   );

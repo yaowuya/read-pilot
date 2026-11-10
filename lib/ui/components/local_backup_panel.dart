@@ -242,42 +242,57 @@ class _LocalBackupPanelState extends State<LocalBackupPanel> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text('本地备份与恢复', style: Theme.of(context).textTheme.titleMedium),
-      const SizedBox(height: 8),
-      const Text(
-        '仅包含本地书籍、对应笔记、分组、显示规则和阅读设置；不包含网络书籍、书源凭据、远程缓存或段落标注。可选择导出明文兼容备份，或使用本机密码加密导出。',
-        style: TextStyle(color: AppColors.muted, fontSize: 13, height: 1.7),
-      ),
-      const SizedBox(height: 16),
-      Wrap(
-        spacing: 10,
-        runSpacing: 10,
+      Row(
         children: [
-          OutlinedButton.icon(
+          const Expanded(
+            child: Text(
+              '本机备份',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ),
+          TextButton(
             key: const Key('backup-export'),
             onPressed: _busy ? null : _export,
-            icon: const Icon(Icons.file_download_outlined, size: 18),
-            label: const Text('导出明文备份'),
-          ),
-          FilledButton.icon(
-            key: const Key('backup-export-encrypted'),
-            onPressed: _busy ? null : _exportEncrypted,
-            icon: const Icon(Icons.lock_outline, size: 18),
-            label: const Text('导出加密备份'),
-          ),
-          OutlinedButton.icon(
-            key: const Key('backup-import'),
-            onPressed: _busy ? null : _import,
-            icon: const Icon(Icons.file_upload_outlined, size: 18),
-            label: const Text('导入备份'),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 34),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              foregroundColor: const Color(0xFF6D94CA),
+              backgroundColor: const Color(0xFFEFF5FE),
+              textStyle: const TextStyle(fontSize: 11),
+            ),
+            child: const Text('立即备份'),
           ),
         ],
       ),
-      if (_message != null)
-        Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: Semantics(liveRegion: true, child: Text(_message!)),
+      const SizedBox(height: 6),
+      Text(
+        _message ?? '尚未导出备份',
+        style: const TextStyle(
+          fontSize: 11,
+          color: Color(0xFFA2ADBC),
+          height: 1.8,
         ),
+      ),
+      const SizedBox(height: 4),
+      const Text(
+        '包含书架、进度、笔记、书源和阅读设置；不包含网络书籍、书源凭据或远程缓存。',
+        style: TextStyle(fontSize: 11, color: Color(0xFFA2ADBC), height: 1.8),
+      ),
+      const SizedBox(height: 10),
+      _BackupOption(
+        key: const Key('backup-export-encrypted'),
+        icon: Icons.lock_outline,
+        title: '导出加密备份',
+        description: '给备份加一道本机密码，只有你能打开。',
+        onTap: _busy ? null : _exportEncrypted,
+      ),
+      _BackupOption(
+        key: const Key('backup-import'),
+        icon: Icons.archive_outlined,
+        title: '从备份恢复',
+        description: '先预览新增与跳过的数量，再决定是否恢复。',
+        onTap: _busy ? null : _import,
+      ),
       if (_error != null)
         Padding(
           padding: const EdgeInsets.only(top: 12),
@@ -291,6 +306,77 @@ class _LocalBackupPanelState extends State<LocalBackupPanel> {
           ),
         ),
     ],
+  );
+}
+
+class _BackupOption extends StatelessWidget {
+  const _BackupOption({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          decoration: BoxDecoration(
+            border: Border.all(color: const Color(0xFFE9EDF3)),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 21, color: const Color(0xFF93A0B4)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      description,
+                      style: const TextStyle(
+                        fontSize: 10.5,
+                        color: Color(0xFFA3ADBA),
+                        height: 1.7,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(
+                Icons.chevron_right,
+                size: 17,
+                color: Color(0xFFB0B8C3),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
   );
 }
 

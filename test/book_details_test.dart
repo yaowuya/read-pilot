@@ -48,6 +48,7 @@ class _DetailsController extends AppController {
   Object? coverError;
   bool switched = false;
   bool refreshed = false;
+  bool onShelf = true;
 
   SourceCandidateSearchResult _candidateResult() => SourceCandidateSearchResult(
     candidates,
@@ -64,12 +65,27 @@ class _DetailsController extends AppController {
   );
 
   @override
-  Book? book(String id) => id == current.id ? current : null;
+  Book? book(String id) => onShelf && id == current.id ? current : null;
 
   @override
   Future<SourceCandidateSearchResult> findSourceCandidates(
     String bookId, {
     Future<void>? abortTrigger,
+  }) async {
+    if (candidateError != null) throw candidateError!;
+    return _candidateResult();
+  }
+
+  @override
+  Future<SourceCandidateSearchResult> findSourceCandidatesFor(
+    Book current, {
+    Future<void>? abortTrigger,
+    void Function(
+      SourceCandidateSearchResult partial,
+      int processed,
+      int total,
+    )?
+    onUpdate,
   }) async {
     if (candidateError != null) throw candidateError!;
     return _candidateResult();
@@ -143,6 +159,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// 设计稿把换源、刷新封面、缓存收进「更多」菜单，测试统一从菜单进。
+  Future<void> pickFromMore(WidgetTester tester, String key) async {
+    await tester.tap(find.byKey(const Key('book-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key(key)));
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('remote details expose source and cover actions', (tester) async {
     controller.candidates = [
       _remoteBook(
@@ -153,6 +177,8 @@ void main() {
     ];
     await pumpDetails(tester);
 
+    await tester.tap(find.byKey(const Key('book-more')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('book-refresh-cover')), findsOneWidget);
     expect(find.byKey(const Key('book-change-source')), findsOneWidget);
     expect(find.byKey(const Key('book-cache-chapters')), findsOneWidget);
@@ -163,10 +189,9 @@ void main() {
     await tester.tap(find.byKey(const Key('source-candidate-candidate')));
     await tester.pumpAndSettle();
     expect(controller.switched, isTrue);
-    expect(find.text('文学 · 新源'), findsOneWidget);
+    expect(find.text('新源'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('book-refresh-cover')));
-    await tester.pumpAndSettle();
+    await pickFromMore(tester, 'book-refresh-cover');
     expect(controller.refreshed, isTrue);
   });
 
@@ -174,11 +199,38 @@ void main() {
     tester,
   ) async {
     await pumpDetails(tester);
-    await tester.tap(find.byKey(const Key('book-change-source')));
-    await tester.pumpAndSettle();
+    await pickFromMore(tester, 'book-change-source');
 
     final sheet = tester.widget<BottomSheet>(find.byType(BottomSheet));
     expect(sheet.backgroundColor, const Color(0xFFF1EDE1));
+  });
+
+  testWidgets('search results switch source before joining the shelf', (
+    tester,
+  ) async {
+    controller.onShelf = false;
+    controller.candidates = [
+      _remoteBook(
+        id: 'candidate',
+        sourceId: 'https://new.example',
+        sourceLabel: '新源',
+      ),
+    ];
+    await pumpDetails(tester);
+
+    // 还没上架的搜索结果也应该能换源，否则只能先加入书架再换。
+    await tester.tap(find.byKey(const Key('book-more')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('book-change-source')), findsOneWidget);
+    expect(find.text('加入书架'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('book-change-source')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('source-candidate-candidate')));
+    await tester.pumpAndSettle();
+
+    // 换源结果留在详情页上，父级持有的旧对象不会把它改回去。
+    expect(find.text('新源'), findsOneWidget);
+    expect(find.text('加入书架'), findsOneWidget);
   });
 
   testWidgets('local books hide source actions', (tester) async {
@@ -197,24 +249,25 @@ void main() {
     );
     await pumpDetails(tester);
 
+    // 本地书仍有正文替换与缓存操作，但没有换源与刷新封面。
+    await tester.tap(find.byKey(const Key('book-more')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('book-refresh-cover')), findsNothing);
     expect(find.byKey(const Key('book-change-source')), findsNothing);
-    expect(find.byKey(const Key('book-cache-chapters')), findsNothing);
+    expect(find.byKey(const Key('book-text-rules')), findsOneWidget);
   });
 
   testWidgets('source sheet distinguishes empty and failed searches', (
     tester,
   ) async {
     await pumpDetails(tester);
-    await tester.tap(find.byKey(const Key('book-change-source')));
-    await tester.pumpAndSettle();
+    await pickFromMore(tester, 'book-change-source');
     expect(find.byKey(const Key('source-switch-empty')), findsOneWidget);
     Navigator.of(tester.element(find.byType(BookDetails))).pop();
     await tester.pumpAndSettle();
 
     controller.candidateError = StateError('候选搜索失败');
-    await tester.tap(find.byKey(const Key('book-change-source')));
-    await tester.pumpAndSettle();
+    await pickFromMore(tester, 'book-change-source');
     expect(find.byKey(const Key('source-switch-error')), findsOneWidget);
     expect(find.textContaining('候选搜索失败'), findsOneWidget);
   });

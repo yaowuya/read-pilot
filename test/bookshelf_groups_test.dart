@@ -35,7 +35,11 @@ void main() {
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('shelf-group-manage')));
+    // 管理分组 moved behind the 添加 sheet on the root shelf; the group row
+    // keeps its own entry once a group is open.
+    await tester.tap(find.byKey(const Key('shelf-add')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-add-groups')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('shelf-group-add')));
     await tester.pumpAndSettle();
@@ -46,13 +50,29 @@ void main() {
     await tester.tap(find.byKey(const Key('shelf-group-close')));
     await tester.pumpAndSettle();
 
+    // The shelf gains one card per group once a group exists, and the books
+    // that still belong to no group keep their place below the cards.
+    expect(find.byKey(Key('shelf-group-${group.id}')), findsOneWidget);
+    expect(find.byKey(const Key('shelf-group-all')), findsOneWidget);
+    expect(find.text('默认'), findsOneWidget);
+    expect(find.text('进度'), findsOneWidget);
+    expect(find.text('书名'), findsOneWidget);
+    expect(find.text('分类'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('book-public-fusheng')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
+
     await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
     await tester.pumpAndSettle();
     expect(find.text('分组里还没有书'), findsOneWidget);
     expect(find.byKey(const Key('book-public-fusheng')), findsNothing);
-    expect(find.text('在读'), findsOneWidget);
-    expect(find.text('已读'), findsOneWidget);
 
+    await tester.tap(find.byKey(const Key('shelf-scope-back')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('shelf-group-all')));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
@@ -74,7 +94,15 @@ void main() {
     await tester.tap(find.byKey(const Key('shelf-group-membership-close')));
     await tester.pumpAndSettle();
 
-    await tester.ensureVisible(find.byKey(Key('shelf-group-${group.id}')));
+    // The header scrolls with the grid, so bring it back before tapping 返回.
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('shelf-scope-back')),
+      -180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shelf-scope-back')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
@@ -102,6 +130,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('shelf-group-${group.id}')));
       await tester.pumpAndSettle();
+      expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('shelf-group-manage')));
       await tester.pumpAndSettle();
@@ -121,6 +150,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.shelfGroups, isEmpty);
       expect(controller.books, hasLength(3));
+      // Deleting the group empties the card layer, so the shelf falls back to
+      // the flat book grid without a group card in sight.
+      expect(find.byKey(const Key('shelf-group-all')), findsNothing);
       expect(find.byKey(const Key('book-public-fusheng')), findsOneWidget);
       expect(tester.takeException(), isNull);
     },

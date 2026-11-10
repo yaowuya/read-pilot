@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:read_pilot/application/app_controller.dart';
 import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
+import 'package:read_pilot/domain/book_source.dart';
 import 'package:read_pilot/domain/source_switch_candidate.dart';
 import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/components/source_switch_sheet.dart';
@@ -173,6 +174,27 @@ class _SwitchController extends AppController {
     return pendingSwitch ??
         current.rebindSource(candidate, position: current.position);
   }
+
+  /// Installed sources offered by the reader page. Empty means "use the real
+  /// repository", so tests that do not care about source actions are unaffected.
+  List<BookSource> installedSources = const [];
+  CandidateSourceAction? lastAction;
+  String? lastActionSourceId;
+  bool actionKeepsRow = true;
+
+  @override
+  List<BookSource> get sources =>
+      installedSources.isEmpty ? super.sources : installedSources;
+
+  @override
+  Future<bool> applyCandidateSourceAction(
+    String sourceId,
+    CandidateSourceAction action,
+  ) async {
+    lastAction = action;
+    lastActionSourceId = sourceId;
+    return actionKeepsRow;
+  }
 }
 
 void main() {
@@ -227,15 +249,91 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('source sheet fills the phone below a small top margin', (
+  testWidgets('source sheet covers about two thirds of the phone', (
     tester,
   ) async {
     await openSheet(tester);
     await tester.pumpAndSettle();
 
     final sheet = tester.getRect(find.byType(SourceSwitchSheet));
-    expect(sheet.height, greaterThanOrEqualTo(812 * .85));
-    expect(sheet.top, lessThan(812 * .15));
+    // 换源是半屏操作：上方留出正文，用户能一边看当前页一边挑书源。
+    expect(sheet.height, lessThanOrEqualTo(812 * .7));
+    expect(sheet.height, greaterThanOrEqualTo(812 * .6));
+    expect(sheet.top, greaterThan(812 * .3));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('header is just the title row plus the filter field', (
+    tester,
+  ) async {
+    controller.candidates = [
+      _book('z-first', 'Zeta', '原作者'),
+      _book('a-second', 'Alpha', '原作者'),
+      _book('a-third', 'Alpha', '另一作者'),
+    ];
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+
+    // 书名/当前书源/当前章节/缓存提示四行说明块整块去掉：换源时看的是候选，
+    // 说明块只会把候选挤出这半屏。书名本身仍出现在候选行上。
+    expect(find.text('当前书源：旧源'), findsNothing);
+    expect(
+      find.byKey(const Key('source-switch-current-chapter')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('source-switch-cache-status')), findsNothing);
+
+    // 候选计数与「相关度」都挪到「换源」这一行，搜索框单独一行压在下面。
+    final title = tester.getRect(find.text('换源'));
+    final count = tester.getRect(find.text('候选 3 · 2 个书源'));
+    final sort = tester.getRect(find.byKey(const Key('source-switch-sort')));
+    final filter = tester.getRect(
+      find.byKey(const Key('source-switch-filter')),
+    );
+    expect(count.center.dy, closeTo(title.center.dy, 12));
+    expect(sort.center.dy, closeTo(title.center.dy, 12));
+    expect(filter.top, greaterThan(title.bottom));
+    expect(filter.height, lessThan(56));
+
+    // 头部瘦下来之后，默认三分之二屏里搜索框和第一张候选不重叠。
+    final firstRow = tester.getRect(
+      find.byKey(const Key('source-candidate-z-first')),
+    );
+    expect(filter.bottom, lessThan(firstRow.top));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('dragging the sheet up grows it, dragging down shrinks it', (
+    tester,
+  ) async {
+    controller.candidates = [
+      _book('a-first', '甲书源', '原作者'),
+      _book('b-second', '乙书源', '原作者'),
+    ];
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+    final collapsed = tester.getRect(find.byType(SourceSwitchSheet)).height;
+
+    // 用户想一次看更多候选时会往上滑。
+    await tester.drag(
+      find.byKey(const Key('source-candidate-a-first')),
+      const Offset(0, -400),
+    );
+    await tester.pumpAndSettle();
+    final expanded = tester.getRect(find.byType(SourceSwitchSheet)).height;
+    expect(expanded, greaterThan(collapsed));
+    expect(expanded, greaterThanOrEqualTo(812 * .8));
+    expect(expanded, lessThanOrEqualTo(812 * .9));
+
+    // 往下滑收回去，但还没收到底，所以面板还在。
+    await tester.drag(
+      find.byKey(const Key('source-candidate-a-first')),
+      const Offset(0, 260),
+    );
+    await tester.pumpAndSettle();
+    final shrunk = tester.getRect(find.byType(SourceSwitchSheet)).height;
+    expect(shrunk, lessThan(expanded));
+    expect(find.byType(SourceSwitchSheet), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -254,11 +352,12 @@ void main() {
       expect(controller.reloads, 0);
       expect(controller.searches, 0);
       expect(find.byKey(const Key('source-candidate-cached')), findsOneWidget);
+      // 头部只剩标题行与筛选框：书说明块整块去掉，缓存提示也随之消失。
+      expect(find.byKey(const Key('source-switch-cache-status')), findsNothing);
       expect(
-        find.byKey(const Key('source-switch-cache-status')),
-        findsOneWidget,
+        find.byKey(const Key('source-switch-current-chapter')),
+        findsNothing,
       );
-      expect(find.text('已恢复上次加载的书源，10 天内可直接选择。'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -442,7 +541,8 @@ void main() {
       // 用户报告：换源成功后再次点开换源，应当直接列出上次加载好的源，
       // 只有点刷新按钮才重新扫描全部书源。
       controller.persistReloads = true;
-      await openSheet(tester);
+      // 换源面板只占约 2/3 屏，用高一点的视口让候选行都落在可见区域。
+      await openSheet(tester, size: const Size(375, 1200));
       await tester.pumpAndSettle();
       expect(controller.reloads, 1);
       expect(controller.searches, 1);
@@ -471,11 +571,8 @@ void main() {
         find.byKey(const Key('source-candidate-a-second')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(const Key('source-switch-cache-status')),
-        findsOneWidget,
-      );
-      expect(find.text('已恢复上次加载的书源，10 天内可直接选择。'), findsOneWidget);
+      // 复用缓存时不再有独立的提示块，头部只保留标题行与筛选框。
+      expect(find.byKey(const Key('source-switch-cache-status')), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -487,7 +584,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('换源'), findsOneWidget);
-    expect(find.text('当前书源：旧源'), findsOneWidget);
     expect(find.text('候选 3 · 2 个书源'), findsOneWidget);
     final filter = find.byKey(const Key('source-switch-filter'));
     await tester.enterText(filter, 'zETA');
@@ -515,7 +611,7 @@ void main() {
   testWidgets(
     'source-name sort is stable and relevance restores controller order',
     (tester) async {
-      await openSheet(tester, size: const Size(800, 1000));
+      await openSheet(tester, size: const Size(800, 2000));
       await tester.pumpAndSettle();
       final first = find.byKey(const Key('source-candidate-z-first'));
       final second = find.byKey(const Key('source-candidate-a-second'));
@@ -553,6 +649,32 @@ void main() {
         'a-third',
       ]);
       expect(controller.searches, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'search options persist the author filter and refresh the candidates',
+    (tester) async {
+      await openSheet(tester, size: const Size(800, 2000));
+      await tester.pumpAndSettle();
+      final before = controller.reloads;
+
+      await tester.tap(find.byKey(const Key('source-switch-options')));
+      await tester.pumpAndSettle();
+      expect(find.text('搜索选项'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('source-options-check-author')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('source-options-sort-word-count')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('source-options-done')));
+      await tester.pumpAndSettle();
+
+      expect(controller.changeSourceSettings.checkAuthor, isTrue);
+      expect(controller.changeSourceSettings.sortByWordCount, isTrue);
+      // 作者过滤发生在收集候选时，所以改完必须重新搜一次而不是只重排列表。
+      expect(controller.reloads, before + 1);
       expect(tester.takeException(), isNull);
     },
   );
@@ -648,21 +770,21 @@ void main() {
     },
   );
 
-  testWidgets('shows a streamed candidate only after its metadata is ready', (
+  testWidgets('lists a streamed candidate before its metadata arrives', (
     tester,
   ) async {
-    // A source hit alone is not selectable: chapter mapping and word count
-    // must arrive in the same update as its card.
+    // A source returning this title is already a switchable target: chapter
+    // mapping and word count are decoration, so they stream in afterwards and
+    // must never keep the row off screen.
     controller
       ..streamedCandidates = true
       ..streamGate = Completer<void>();
     await openSheet(tester);
     await tester.pump();
 
-    expect(find.byKey(const Key('source-switch-loading')), findsOneWidget);
-    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
-    expect(find.text('章节：正在加载信息…'), findsNothing);
-    expect(find.text('字数：正在加载…'), findsNothing);
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+    expect(find.text('章节：正在加载信息…'), findsOneWidget);
+    expect(find.text('字数：正在加载…'), findsOneWidget);
     expect(find.textContaining('正在查找其他同名书源'), findsOneWidget);
 
     controller.streamGate!.complete();
@@ -688,7 +810,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('reports pending metadata after source discovery completes', (
+  testWidgets('reports pending metadata while listing found candidates', (
     tester,
   ) async {
     controller
@@ -700,12 +822,21 @@ void main() {
     await openSheet(tester);
     await tester.pump();
 
-    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+    // The found source is listed immediately; only its summary is pending.
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
     expect(find.text('正在加载候选章节与字数…（剩余 3）'), findsOneWidget);
 
     controller.streamGate!.complete();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('source-candidate-word-count-z-first')),
+          )
+          .data,
+      '字数：4',
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -717,7 +848,7 @@ void main() {
         ..streamGate = Completer<void>();
       await openSheet(tester);
       await tester.pump();
-      expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+      expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
 
       Navigator.of(tester.element(find.byType(SourceSwitchSheet))).pop();
       await tester.pumpAndSettle();
@@ -910,5 +1041,98 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.searches, 2);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('candidate rows expose the source actions legado offers', (
+    tester,
+  ) async {
+    controller.installedSources = [
+      BookSource({
+        'bookSourceUrl': 'https://zeta.example',
+        'bookSourceName': 'Zeta',
+      }),
+    ];
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('source-candidate-menu-z-first')));
+    await tester.pumpAndSettle();
+    expect(find.text('置顶书源'), findsOneWidget);
+    expect(find.text('置底书源'), findsOneWidget);
+    expect(find.text('停用书源'), findsOneWidget);
+    expect(find.text('删除书源'), findsOneWidget);
+
+    await tester.tap(find.text('置顶书源'));
+    await tester.pumpAndSettle();
+    expect(controller.lastAction, CandidateSourceAction.top);
+    expect(controller.lastActionSourceId, 'https://zeta.example');
+    // 置顶/置底只是改排序，候选行必须留在原处。
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+  });
+
+  testWidgets('disabling a source from the candidate list drops its row', (
+    tester,
+  ) async {
+    controller.installedSources = [
+      BookSource({
+        'bookSourceUrl': 'https://zeta.example',
+        'bookSourceName': 'Zeta',
+      }),
+    ];
+    controller.actionKeepsRow = true;
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('source-candidate-menu-z-first')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('停用书源'));
+    await tester.pumpAndSettle();
+
+    expect(controller.lastAction, CandidateSourceAction.disable);
+    // 停用的源不再参与换源：行必须立刻消失，否则用户会以为没生效。
+    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+    expect(find.text('已停用该书源。'), findsOneWidget);
+  });
+
+  testWidgets('deleting a source from the candidate list confirms first', (
+    tester,
+  ) async {
+    controller.installedSources = [
+      BookSource({
+        'bookSourceUrl': 'https://zeta.example',
+        'bookSourceName': 'Zeta',
+      }),
+    ];
+    controller.actionKeepsRow = false;
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('source-candidate-menu-z-first')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除书源'));
+    await tester.pumpAndSettle();
+
+    // 删除是破坏性操作，必须先确认。
+    expect(find.text('确认移除'), findsOneWidget);
+    expect(controller.lastAction, isNull);
+    await tester.tap(find.text('确认移除'));
+    await tester.pumpAndSettle();
+
+    expect(controller.lastAction, CandidateSourceAction.delete);
+    expect(find.byKey(const Key('source-candidate-z-first')), findsNothing);
+  });
+
+  testWidgets('a candidate from an uninstalled source has no action menu', (
+    tester,
+  ) async {
+    // installedSources 为空：候选仍会列出，但没有可操作的书源记录。
+    await openSheet(tester);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('source-candidate-z-first')), findsOneWidget);
+    expect(
+      find.byKey(const Key('source-candidate-menu-z-first')),
+      findsNothing,
+    );
   });
 }

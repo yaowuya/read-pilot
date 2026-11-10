@@ -5,6 +5,45 @@ import '../theme.dart';
 String errorMessage(Object error) =>
     error is FormatException ? error.message : error.toString();
 
+final _blockTagPattern = RegExp(
+  r'<\s*(?:br|/?p|/?div|/?li|/?h[1-6])\s*/?>',
+  caseSensitive: false,
+);
+final _anyTagPattern = RegExp(r'<[^>]*>');
+final _htmlEntities = <String, String>{
+  '&nbsp;': ' ',
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+  '&ldquo;': '“',
+  '&rdquo;': '”',
+  '&hellip;': '…',
+  '&mdash;': '—',
+};
+
+/// 书源简介常常直接给出 HTML 片段（`<p class="book-desc">…</p>`、`&nbsp;`），
+/// 塞进 Text 就会把标签当成正文显示。这里只在显示层剥掉标签并还原常见实体，
+/// 数据层仍按书源原样保存：换源比较、备份与导出都不受这层影响。
+String bookIntroText(String raw) {
+  if (raw.isEmpty) return '';
+  var text = raw
+      .replaceAll(
+        RegExp(r'<(script|style)[^>]*>[\s\S]*?</\1>', caseSensitive: false),
+        '',
+      )
+      .replaceAll(_blockTagPattern, '\n')
+      .replaceAll(_anyTagPattern, '');
+  for (final entry in _htmlEntities.entries) {
+    text = text.replaceAll(entry.key, entry.value);
+  }
+  return text
+      .replaceAll(RegExp(r'[ \t\u3000]+'), ' ')
+      .replaceAll(RegExp(r'\n\s*\n+'), '\n')
+      .trim();
+}
+
 void showMessage(BuildContext context, String message) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()

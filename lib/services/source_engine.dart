@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../domain/book.dart';
 import '../domain/book_source.dart';
 import 'source_importer.dart';
+import 'source_runtime/concurrent_rate_limiter.dart';
 import 'source_runtime/content_normalizer.dart';
 import 'source_runtime/content_replacement.dart';
 import 'source_runtime/request_plan.dart';
@@ -43,13 +44,27 @@ class SourceEngine {
 
   static const _maxChapters = 10000;
   static const _maxDomNodes = 50000;
-  static const _maxTocPages = 10;
-  static const _maxContentPages = 10;
+
+  /// 目录分页的请求次数上限。目录页通常只列几十章，500 页早已远超
+  /// [_maxChapters] 能容纳的章节数，所以真实书源不会撞到它；它只用来兜住
+  /// “下一页永远有新内容”的病态书源。到上限时保留已解析的目录继续阅读，
+  /// 不再整本书报错——早先的固定页数上限会让长篇书籍无法加入书架。
+  static const _maxTocPages = 500;
+
+  /// 连续这么多页都没有解析到新章节，就认为目录已经走到尽头。有的书源会给出
+  /// 不断变化的“下一页”链接却始终重复同样的内容，此时保留已解析的目录继续使用，
+  /// 而不是让整本书因为目录翻不完而无法加入书架。
+  static const _maxStalledTocPages = 10;
+
+  /// 正文分页上限。Legado 只靠 URL 去重做保护，真实书源里一章被拆成十几页很常见，
+  /// 所以这里给一个宽松的安全上限：到达上限就带着已取到的正文停下，而不是整章报错。
+  static const _maxContentPages = 50;
 
   final RequestPlanner _planner;
   final RuleInterpreter _interpreter;
   final SandboxedScriptRuntime _scriptRuntime;
   final SourceTransport _transport;
+  final ConcurrentRateLimiters _rateLimiters = ConcurrentRateLimiters();
   final Duration timeout;
   final int maxResponseBytes;
 
@@ -85,10 +100,17 @@ class SourceEngine {
     );
   }
 
+  /// Loads one page of an explore category.
+  ///
+  /// [exploreInfo] carries the values a source's own form items collected (text
+  /// fields, toggles, selects), which legado threads into the category URL as
+  /// `{{name}}` placeholders. It is sent as request variables rather than as a
+  /// script context because this runtime has no script engine.
   Future<List<Book>> explore(
     BookSource source,
     SourceExploreEntry entry, {
     int page = 1,
+    Map<String, String> exploreInfo = const {},
     Future<void>? abortTrigger,
   }) async {
     final rules = source.exploreRules;
@@ -96,7 +118,7 @@ class SourceEngine {
     final response = await _fetch(
       source,
       entry.url,
-      variables: {'page': page},
+      variables: {'page': page, ...exploreInfo},
       abortTrigger: abortTrigger,
     );
     return _parseBookList(
@@ -189,6 +211,8 @@ class SourceEngine {
       throw const SourceException('封面地址必须是与书源同源的 HTTP(S) 链接。');
     }
     try {
+      // Covers hit the same host, so they share the source's rate budget.
+      await _rateLimiters.acquire(source.id, source.concurrentRate);
       final response = await _transport.execute(
         _planner.plan(source, requested.toString()),
         policy: SourceNetworkPolicy(allowedOrigins: {declared.origin}),
@@ -243,12 +267,13 @@ class SourceEngine {
     final chapters = <String, Chapter>{};
     final visitedTocPages = <String>{};
     var nextTocUri = tocUri;
+    var stalledPages = 0;
     for (var page = 0; ; page++) {
       await _throwIfCancelled(abortTrigger);
       if (!visitedTocPages.add(nextTocUri.toString())) break;
-      if (page >= _maxTocPages) {
-        throw const SourceException('目录分页超过 $_maxTocPages 页，已停止读取。');
-      }
+      // 到请求次数上限时保留已解析的目录：长篇书籍的目录可能有上百页，截断这里
+      // 会整本书加不进书架，而丢掉尾部章节比“完全无法阅读”要好得多。
+      if (page >= _maxTocPages) break;
       final toc = nextTocUri == info.detail.url
           ? info.detail
           : await _fetch(
@@ -257,6 +282,7 @@ class SourceEngine {
               abortTrigger: abortTrigger,
             );
       final tocRoot = _ruleRoot(toc.body, tocRules.values);
+      final knownChapters = chapters.length;
       for (final element in _interpreter.select(
         tocRoot,
         _requiredRule(tocRules, 'ruleToc', 'chapterList'),
@@ -279,6 +305,10 @@ class SourceEngine {
           throw const SourceException('目录超过 $_maxChapters 章，已停止导入，未保存截断结果。');
         }
       }
+      stalledPages = chapters.length == knownChapters ? stalledPages + 1 : 0;
+      // 书源可能给出永不重复的“下一页”地址却一直返回相同内容，此时同样保留
+      // 已解析的目录，避免为了一个坏掉的翻页规则让整本书无法阅读。
+      if (stalledPages >= _maxStalledTocPages) break;
       final nextValue = _interpreter.extractFirst(
         tocRoot,
         tocRules['nextTocUrl'],
@@ -344,7 +374,16 @@ class SourceEngine {
       throw const SourceException('replaceRegex 必须使用安全的“正则##替换文本”格式。');
     }
     final nextRule = rules['nextContentUrl'];
-    final isHtml = contentRule.toLowerCase().endsWith('@html');
+    // 只看选择器部分是否以 @html 结尾：规则常常写成
+    // `.TxtContent@html##<script.*?</script>|…`，整串去比对会漏判，
+    // 把 HTML 标签当成正文塞进阅读器。Legado 则无条件走 HtmlFormatter，
+    // 这里在 @html 之外再兜一层「像标签就按 HTML 处理」。
+    final selectorPart = contentRule.contains('##')
+        ? contentRule.substring(0, contentRule.indexOf('##'))
+        : contentRule;
+    final isHtml =
+        selectorPart.toLowerCase().trimRight().endsWith('@html') ||
+        RegExp(r'</?[a-zA-Z][^>]*>').hasMatch(contentRule);
     final paragraphs = <String>[];
     final visited = <String>{};
     var nextUrl = chapter.url!;
@@ -353,9 +392,9 @@ class SourceEngine {
     for (var page = 0; ; page++) {
       await _throwIfCancelled(abortTrigger);
       if (!visited.add(nextUrl)) break;
-      if (page >= _maxContentPages) {
-        throw const SourceException('正文分页超过 $_maxContentPages 页，已停止读取。');
-      }
+      // 达到安全上限时保留已经取到的正文停下，而不是丢掉整章。真实书源里一章
+      // 被拆成十几二十页很常见，Legado 本身也只靠 URL 去重来防止死循环。
+      if (page >= _maxContentPages) break;
       final response = await _fetch(
         source,
         nextUrl,
@@ -495,6 +534,13 @@ class SourceEngine {
       throw const SourceException('书源声明的地址必须是无账号密码的 HTTP(S) 地址。');
     }
     try {
+      await _throwIfCancelled(abortTrigger);
+      // Legado honors a source's own `concurrentRate` on every request it makes,
+      // so a source that asks for 3 请求/秒 gets at most that even when a
+      // 16-source 换源 search is running concurrently. Waiting happens before the
+      // template is resolved so a queued request never holds a resolved URL that
+      // could go stale while it waits.
+      await _rateLimiters.acquire(source.id, source.concurrentRate);
       await _throwIfCancelled(abortTrigger);
       final resolvedTemplate = await _resolveRequestTemplate(
         source,

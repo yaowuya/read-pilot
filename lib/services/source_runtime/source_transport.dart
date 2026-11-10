@@ -250,20 +250,47 @@ class SourceTransport {
       r'''charset\s*=\s*["']?([^;\s"']+)''',
       caseSensitive: false,
     ).firstMatch(contentType ?? '')?[1]?.toLowerCase();
-    final charset = declared?.replaceAll('_', '-');
-    if (charset == null ||
-        charset == 'utf-8' ||
-        charset == 'utf8' ||
-        charset == 'us-ascii') {
-      return utf8.decode(bytes);
+    final headerCharset = declared?.replaceAll('_', '-');
+    if (headerCharset != null &&
+        headerCharset != 'utf-8' &&
+        headerCharset != 'utf8' &&
+        headerCharset != 'us-ascii') {
+      if ({'gbk', 'gb2312', 'cp936', 'windows-936'}.contains(headerCharset)) {
+        return gbk.decode(bytes, allowMalformed: false);
+      }
+      throw SourceTransportException(
+        SourceTransportErrorKind.invalidEncoding,
+        '暂不支持书源响应编码 $declared。',
+      );
     }
-    if ({'gbk', 'gb2312', 'cp936', 'windows-936'}.contains(charset)) {
+
+    // 响应头没声明编码时不能直接假定 UTF-8：中文站常用 GBK，而且不少站点
+    // 只在页面 meta 里写编码。顺序是「响应头 → 页面 meta → UTF-8 → GBK」，
+    // 只有明确判定不是 UTF-8 才换 GBK，避免把正常页面解成乱码。
+    final sniffed = _sniffMetaCharset(bytes);
+    if (sniffed != null &&
+        {'gbk', 'gb2312', 'cp936', 'windows-936'}.contains(sniffed)) {
       return gbk.decode(bytes, allowMalformed: false);
     }
-    throw SourceTransportException(
-      SourceTransportErrorKind.invalidEncoding,
-      '暂不支持书源响应编码 $declared。',
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      // 最后一道兜底：真实书源里偶尔有既非 UTF-8 也非严格 GBK 的脏字节，
+      // 与其整章报错，不如用替换字符解码，让用户至少能读到正文。
+      return gbk.decode(bytes, allowMalformed: true);
+    }
+  }
+
+  /// 从响应体前 2 KB 的 `<meta charset>` / `<meta http-equiv>` 里嗅探编码。
+  static String? _sniffMetaCharset(Uint8List bytes) {
+    final head = latin1.decode(
+      bytes.length > 2048 ? bytes.sublist(0, 2048) : bytes,
     );
+    final match = RegExp(
+      r'''charset\s*=\s*["']?\s*([\w-]+)''',
+      caseSensitive: false,
+    ).firstMatch(head);
+    return match?[1]?.toLowerCase().replaceAll('_', '-');
   }
 
   static void _checkUri(Uri uri, SourceNetworkPolicy policy) {

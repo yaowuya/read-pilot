@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -6,13 +7,16 @@ import '../data/app_repository.dart';
 import '../data/sample_catalog.dart';
 import '../domain/book.dart';
 import '../domain/book_source.dart';
+import '../domain/change_source_settings.dart';
+import '../domain/explore_kind.dart';
 import '../domain/reader_settings.dart';
 import '../domain/reader_style_preset.dart';
 import '../domain/reader_mark.dart';
 import '../domain/reading_activity.dart';
 import '../domain/shelf_group.dart';
-import '../domain/source_import.dart';
+import '../domain/source_check_settings.dart';
 import '../domain/source_health.dart';
+import '../domain/source_import.dart';
 import '../domain/source_switch.dart';
 import '../domain/source_switch_candidate.dart';
 import '../services/book_text_rules.dart';
@@ -40,11 +44,11 @@ class AppController extends ChangeNotifier {
   final SourceEngine engine;
   final SourceImportService sourceImportService;
   final SourceSearchScheduler _sourceSearchScheduler;
-  static const _sourceCandidateMetadataConcurrency = 3;
-  // Backpressure keeps a noisy search result from queuing an unbounded number
-  // of full catalog/content loads while preserving early ready candidates.
-  static const _sourceCandidateMetadataBacklogLimit =
-      _sourceCandidateMetadataConcurrency * 4;
+  // Catalog + first-chapter reads decorate an already-visible row, so several
+  // can run together. They no longer block the search or the list, so the only
+  // thing this bound protects is the phone's radio and memory: a busy search of
+  // a thousand sources must not queue a thousand throttled catalog reads.
+  static const _sourceCandidateMetadataConcurrency = 6;
   List<Book> _books = [];
   List<ShelfGroup> _shelfGroups = [];
   List<Book> _catalog = [];
@@ -56,6 +60,8 @@ class AppController extends ChangeNotifier {
   Map<String, List<BookTextRule>> _textRules = {};
   final _textRulesRevisions = <String, int>{};
   ReaderSettings _settings = const ReaderSettings();
+  ChangeSourceSettings _changeSourceSettings = const ChangeSourceSettings();
+  SourceCheckSettings _sourceCheckSettings = const SourceCheckSettings();
   final _chapterLoads = <String, Future<Chapter>>{};
   final _cacheClears = <String>{};
   bool _disposed = false;
@@ -66,8 +72,14 @@ class AppController extends ChangeNotifier {
   List<BookSource> get sources => List.unmodifiable(_sources);
   List<SourceExploreCategory> get exploreCategories {
     final categories = <SourceExploreCategory>[];
+    final seenIds = <String>{};
     for (final source in _sources.where((source) => source.enabled)) {
       for (final entry in source.exploreEntries) {
+        // The discover page keys each category chip by [SourceExploreCategory.id];
+        // duplicate ids would crash its Wrap with "Duplicate keys found".
+        if (!seenIds.add('${source.id}::${entry.title}::${entry.url}')) {
+          continue;
+        }
         categories.add(SourceExploreCategory(source, entry));
         if (categories.length == 500) return List.unmodifiable(categories);
       }
@@ -212,6 +224,8 @@ class AppController extends ChangeNotifier {
     _readerMarks = await repository.readerMarks();
     _readingActivities = await repository.readingActivities();
     _settings = await repository.settings();
+    _changeSourceSettings = await repository.changeSourceSettings();
+    _sourceCheckSettings = await repository.sourceCheckSettings();
     _readerStylePresets = await repository.readerStylePresets();
     _notify();
   }
@@ -708,12 +722,39 @@ class AppController extends ChangeNotifier {
     throw const SourceException('书源已移除。已缓存章节仍可阅读，获取新章节需重新导入书源。');
   }
 
+  /// Checks one source and records the verdict on it, like Legado does.
+  ///
+  /// The repository write is what makes the difference visible after the sheet
+  /// closes: `respondTime`, the failing stage tags and the `// Error:` comment
+  /// all land on the source record, so the list keeps showing which workflow
+  /// broke instead of forgetting the diagnosis.
   Future<SourceHealthReport> checkSourceHealth(
     String sourceId, {
     Future<void>? abortTrigger,
-  }) => SourceHealthCheck(
-    engine,
-  ).check(_source(sourceId), abortTrigger: abortTrigger);
+  }) async {
+    final source = _source(sourceId);
+    final report = await SourceHealthCheck(
+      engine,
+      settings: _sourceCheckSettings,
+    ).check(source, abortTrigger: abortTrigger);
+    // A cancelled run says nothing about the source, so it must not overwrite the
+    // last real verdict with zero-duration noise.
+    if (!_isCancelled(report)) {
+      final updated = await repository.recordSourceHealth(
+        source: source,
+        report: report,
+      );
+      _sources = [
+        for (final item in _sources) item.id == sourceId ? updated : item,
+      ];
+      _notify();
+    }
+    return report;
+  }
+
+  static bool _isCancelled(SourceHealthReport report) => report.results.any(
+    (result) => result.status == SourceHealthStatus.cancelled,
+  );
 
   Future<SourceImportPreview> prepareSourceImport(
     SourceImportInput input, {
@@ -815,8 +856,7 @@ class AppController extends ChangeNotifier {
           (entry) =>
               entry.candidate.sourceId != current.sourceId &&
               entry.candidate.sourceId != null &&
-              enabledSourceIds.contains(entry.candidate.sourceId) &&
-              (entry.info?.isReadyForDisplay ?? false),
+              enabledSourceIds.contains(entry.candidate.sourceId),
         )
         .toList();
     // A cached list is always authoritative for this opening, including when
@@ -892,9 +932,9 @@ class AppController extends ChangeNotifier {
   /// 搜索结果里的书还没加入书架也能换源，此时只有内存中的这本对象，所以直接
   /// 用传入的书籍定位同名候选。
   ///
-  /// [onUpdate] emits a candidate only after its mapped chapter and word count
-  /// are ready. Source discovery and metadata loading run together, so a usable
-  /// row can appear before a long all-source search finishes.
+  /// [onUpdate] emits candidates as their sources return them. A candidate's
+  /// mapped chapter and word count are filled in later by a bounded metadata
+  /// queue, so a usable row appears long before a long all-source search ends.
   Future<SourceCandidateSearchResult> findSourceCandidatesFor(
     Book current, {
     Future<void>? abortTrigger,
@@ -911,6 +951,10 @@ class AppController extends ChangeNotifier {
     var aborted = false;
     final titleKey = _matchKey(current.title);
     final authorKey = _matchKey(current.author);
+    // Legado `ChangeSourceSettings.checkAuthor`：开启后只保留作者命中的候选，
+    // 避免把同名不同作者的书写进书架。默认关闭，因为各书源的作者写法差异很
+    // 大，强制过滤会漏掉可用候选。
+    final checkAuthor = _changeSourceSettings.checkAuthor;
     final sourceOrderById = {
       for (final entry in _sources.where((source) => source.enabled).indexed)
         entry.$2.id: entry.$1,
@@ -928,8 +972,6 @@ class AppController extends ChangeNotifier {
         >[];
     var nextMetadata = 0;
     var activeMetadataLoads = 0;
-    var availableMetadataSlots = _sourceCandidateMetadataBacklogLimit;
-    final metadataSlotWaiters = <Completer<bool>>[];
     var searchFinished = false;
     final metadataDrained = Completer<void>();
     var failedSources = 0;
@@ -947,39 +989,17 @@ class AppController extends ChangeNotifier {
       if (unavailableCandidateSourceIds.add(sourceId!)) failedSources++;
     }
 
-    Future<bool> acquireMetadataSlot() {
-      if (aborted) return Future.value(false);
-      if (availableMetadataSlots > 0) {
-        availableMetadataSlots--;
-        return Future.value(true);
-      }
-      final waiter = Completer<bool>();
-      metadataSlotWaiters.add(waiter);
-      return waiter.future;
-    }
-
-    void releaseMetadataSlot() {
-      if (metadataSlotWaiters.isNotEmpty) {
-        metadataSlotWaiters.removeAt(0).complete(!aborted);
-      } else if (!aborted) {
-        availableMetadataSlots++;
-      }
-    }
-
     late void Function() finishMetadataIfDrained;
 
     void cancelMetadataWaiters() {
       if (aborted) return;
       aborted = true;
-      for (final waiter in metadataSlotWaiters) {
-        if (!waiter.isCompleted) waiter.complete(false);
-      }
-      metadataSlotWaiters.clear();
       finishMetadataIfDrained();
     }
 
     SourceCandidateSearchResult snapshot() {
-      final sorted = ready.values.toList()..sort(_compareCandidates);
+      final sorted = ready.values.toList()
+        ..sort((left, right) => _compareCandidates(left, right, infoById));
       return SourceCandidateSearchResult(
         sorted.map((item) => item.book),
         failedSources: failedSources,
@@ -1024,27 +1044,40 @@ class AppController extends ChangeNotifier {
           item.book,
           abortTrigger: abortTrigger,
         );
-        if (!aborted && isEnabledAlternativeSource(item.book.sourceId)) {
-          if (info != null) {
-            ready[item.book.id] = item;
-            infoById[item.book.id] = info;
+        if (!aborted) {
+          if (!isEnabledAlternativeSource(item.book.sourceId)) {
+            // The source was removed or disabled mid-flight, so the candidate
+            // shown optimistically for it must go away again.
+            if (ready.remove(item.book.id) != null) {
+              infoById.remove(item.book.id);
+              report();
+            }
           } else {
-            // A failed catalog/map/content read means this source did not
-            // produce a complete candidate list. Keep an existing cache rather
-            // than replacing it with a transiently truncated result.
-            markUnavailableCandidateSource(item.book.sourceId);
+            if (info != null) {
+              ready[item.book.id] = item;
+              infoById[item.book.id] = info;
+            } else {
+              // The row stays selectable, only its chapter/word-count summary
+              // is missing: switching loads the target anyway and reports its
+              // own failure. A failed read still means this source did not
+              // produce a complete candidate list, so an existing complete
+              // cache must not be replaced by this truncated result.
+              markUnavailableCandidateSource(item.book.sourceId);
+            }
+            report();
           }
-          report();
         }
       } finally {
         activeMetadataLoads--;
-        releaseMetadataSlot();
         if (!aborted) scheduleMetadataLoads();
         finishMetadataIfDrained();
       }
     }
 
     scheduleMetadataLoads = () {
+      // Decoration never gates the list or the search: the queue only decides
+      // how many catalog reads may be in flight, and the sheet renders each row
+      // as soon as its source answered.
       while (!aborted &&
           activeMetadataLoads < _sourceCandidateMetadataConcurrency &&
           nextMetadata < metadataQueue.length) {
@@ -1076,26 +1109,34 @@ class AppController extends ChangeNotifier {
           for (final candidate in group.books) {
             final resultOrder = candidateOrder++;
             if (!seen.add(candidate.id) ||
-                _matchKey(candidate.title) != titleKey ||
+                !_matchesCandidate(
+                  candidate,
+                  titleKey,
+                  authorKey,
+                  checkAuthor,
+                ) ||
                 !isEnabledAlternativeSource(candidate.sourceId)) {
               continue;
             }
-            final acquired = await acquireMetadataSlot();
-            if (!acquired) return;
-            if (aborted || !isEnabledAlternativeSource(candidate.sourceId)) {
-              releaseMetadataSlot();
-              return;
-            }
-            metadataQueue.add((
+            // A source that returned this title is already a switchable target:
+            // switching loads the catalog itself and reports its own failure.
+            // Chapter mapping and word count are decoration that arrives later,
+            // so they must never hold the row back — with hundreds of sources a
+            // read of every candidate catalog would delay the whole list.
+            final item = (
               book: candidate,
-              authorMatch:
-                  authorKey.isNotEmpty &&
-                  _matchKey(candidate.author) == authorKey,
+              authorMatch: _authorMatches(candidate, authorKey),
               sourceOrder: sourceOrder,
               candidateOrder: resultOrder,
-            ));
-            scheduleMetadataLoads();
+            );
+            ready[candidate.id] = item;
+            metadataQueue.add(item);
           }
+          // Rows are published immediately and decoration is queued without
+          // blocking the search, so a slow catalog read never keeps a found
+          // source off screen nor stalls the remaining sources.
+          scheduleMetadataLoads();
+          report();
         }
         report();
       },
@@ -1163,14 +1204,55 @@ class AppController extends ChangeNotifier {
   static int _chapterWordCount(Chapter chapter) =>
       chapter.paragraphs.join().replaceAll(RegExp(r'\s+'), '').runes.length;
 
-  static int _compareCandidates(
+  /// Whether [candidate] may be offered as a replacement for the current book.
+  ///
+  /// Legado matches the name exactly and, when `checkAuthor` is on, requires the
+  /// candidate's author to *contain* the current author
+  /// (`fName == name && (!checkAuthor || fAuthor.contains(author))` in
+  /// `ChangeSourceSearchUseCase.kt`). Containment rather than equality is what
+  /// tolerates "天蚕土豆" vs "天蚕土豆 著" across sources.
+  static bool _matchesCandidate(
+    Book candidate,
+    String titleKey,
+    String authorKey,
+    bool checkAuthor,
+  ) {
+    if (_matchKey(candidate.title) != titleKey) return false;
+    if (!checkAuthor || authorKey.isEmpty) return true;
+    return _authorMatches(candidate, authorKey);
+  }
+
+  static bool _authorMatches(Book candidate, String authorKey) =>
+      authorKey.isNotEmpty && _matchKey(candidate.author).contains(authorKey);
+
+  /// Orders candidates the way Legado's 换源列表 does.
+  ///
+  /// Author match always wins: a same-author source is the safer replacement.
+  /// When the word-count sort is on, richer content comes first — Legado sorts
+  /// by `chapterWordCount > 1000`, then the chapter number in the candidate's
+  /// summary, then the raw word count, and only then by configured source order
+  /// (`ChangeBookSourceComposeViewModel.kt`). Without it, source order decides.
+  int _compareCandidates(
     ({Book book, bool authorMatch, int sourceOrder, int candidateOrder}) left,
     ({Book book, bool authorMatch, int sourceOrder, int candidateOrder}) right,
+    Map<String, SourceCandidateInfo> infoById,
   ) {
     final author = (right.authorMatch ? 1 : 0).compareTo(
       left.authorMatch ? 1 : 0,
     );
     if (author != 0) return author;
+    if (_changeSourceSettings.sortByWordCount) {
+      final leftInfo = infoById[left.book.id];
+      final rightInfo = infoById[right.book.id];
+      final words = (rightInfo?.wordCount ?? 0).compareTo(
+        leftInfo?.wordCount ?? 0,
+      );
+      if (words != 0) return words;
+      final chapters = (rightInfo?.chapterCount ?? 0).compareTo(
+        leftInfo?.chapterCount ?? 0,
+      );
+      if (chapters != 0) return chapters;
+    }
     final source = left.sourceOrder.compareTo(right.sourceOrder);
     if (source != 0) return source;
     final candidate = left.candidateOrder.compareTo(right.candidateOrder);
@@ -1179,12 +1261,23 @@ class AppController extends ChangeNotifier {
 
   /// Rebinds one shelf book only after target content and persistence succeed.
   /// Rejects a destination change during loading so callers can retry explicitly.
+  ///
+  /// 不在书架的书（例如还没加入书架、只在发现页看到的搜索结果）换源只做内存
+  /// 替换：加载目标书源的书目后直接返回，不写数据库，也没有书签与进度需要迁移，
+  /// 与 Legado 对未上架书籍的处理一致。
   Future<Book> switchBookSource(String bookId, Book candidate) async {
     final current = book(bookId);
-    if (current == null || !current.isRemote) {
+    if (candidate.sourceId == null) {
+      throw const SourceException('请选择其他可用书源。');
+    }
+    if (current == null) {
+      final source = _source(candidate.sourceId!);
+      return engine.loadBook(source, candidate);
+    }
+    if (!current.isRemote) {
       throw const SourceException('只有书架中的网络书籍可以换源。');
     }
-    if (candidate.sourceId == null || candidate.sourceId == current.sourceId) {
+    if (candidate.sourceId == current.sourceId) {
       throw const SourceException('请选择其他可用书源。');
     }
     final source = _source(candidate.sourceId!);
@@ -1281,6 +1374,7 @@ class AppController extends ChangeNotifier {
   Future<SourceSearchGroup> exploreSource(
     SourceExploreCategory category, {
     int page = 1,
+    Map<String, String> exploreInfo = const {},
     Future<void>? abortTrigger,
   }) async {
     try {
@@ -1290,6 +1384,7 @@ class AppController extends ChangeNotifier {
           category.source,
           category.entry,
           page: page,
+          exploreInfo: exploreInfo,
           abortTrigger: abortTrigger,
         ),
       );
@@ -1297,6 +1392,184 @@ class AppController extends ChangeNotifier {
       return SourceSearchGroup(category.source, [], error: error.toString());
     }
   }
+
+  /// Explores one source's category using the form values its own items
+  /// collected, so text/toggle/select kinds reach the request as variables.
+  Future<SourceSearchGroup> exploreKind(
+    BookSource source,
+    ExploreKind kind, {
+    int page = 1,
+    Future<void>? abortTrigger,
+  }) async {
+    final info = await repository.exploreInfo(source.id);
+    final entry = SourceExploreEntry(title: kind.title, url: kind.url ?? '');
+    try {
+      return SourceSearchGroup(
+        source,
+        await engine.explore(
+          source,
+          entry,
+          page: page,
+          exploreInfo: info,
+          abortTrigger: abortTrigger,
+        ),
+      );
+    } catch (error) {
+      return SourceSearchGroup(source, [], error: error.toString());
+    }
+  }
+
+  /// Sources the discover page lists, in legado's order: `customOrder` first and
+  /// only sources that opted into explore.
+  List<BookSource> get exploreSources => List.unmodifiable([
+    for (final source in _sources)
+      if (source.enabled && source.enabledExplore && source.hasExplore) source,
+  ]);
+
+  /// 换源面板的搜索开关（作者过滤、按字数排序）。
+  ChangeSourceSettings get changeSourceSettings => _changeSourceSettings;
+
+  /// Every group name declared by any installed source, sorted for the filter.
+  /// Every user-visible source group.
+  ///
+  /// Health verdicts are written into `bookSourceGroup` (legado does the same),
+  /// but they are not groups the user ever chose — offering `搜索失效` or
+  /// `校验超时` as a filter would let the user browse by brokenness and would
+  /// contradict the source rows, which already hide those tags.
+  List<String> get sourceGroups {
+    final groups = <String>{};
+    for (final source in _sources) {
+      groups.addAll(
+        source.groups.where((group) => !SourceHealthTag.isInvalid(group)),
+      );
+    }
+    final sorted = groups.toList()..sort();
+    return List.unmodifiable(sorted);
+  }
+
+  /// Sources in [group], or every explore source when [group] is null/blank.
+  List<BookSource> exploreSourcesInGroup(String? group) {
+    final name = group?.trim() ?? '';
+    if (name.isEmpty) return exploreSources;
+    return List.unmodifiable(
+      exploreSources.where((source) => source.groups.contains(name)),
+    );
+  }
+
+  Future<Map<String, String>> sourceExploreInfo(String sourceId) =>
+      repository.exploreInfo(sourceId);
+
+  Future<void> saveSourceExploreInfo(
+    String sourceId,
+    Map<String, String> values,
+  ) => repository.saveExploreInfo(sourceId, values);
+
+  Future<ExploreMainSelection> exploreSelection() =>
+      repository.exploreSelection();
+
+  Future<void> saveExploreSelection(ExploreMainSelection selection) =>
+      repository.saveExploreSelection(selection);
+
+  /// Recent search keywords, newest first.
+  Future<List<String>> searchHistory() => repository.searchHistory();
+
+  /// Records [keyword] at the top of the history and returns the new list.
+  Future<List<String>> rememberSearch(String keyword) =>
+      repository.rememberSearch(keyword);
+
+  Future<void> clearSearchHistory() => repository.clearSearchHistory();
+
+  Future<void> setSourceEnabledExplore(BookSource source, bool value) async {
+    if (!_sources.any((item) => item.id == source.id)) return;
+    await repository.setSourceEnabledExplore(source.id, value);
+    _sources = _sources
+        .map(
+          (item) =>
+              item.id == source.id ? item.withEnabledExplore(value) : item,
+        )
+        .toList();
+    _notify();
+  }
+
+  /// Saves an edited source and refreshes the in-memory list.
+  ///
+  /// Editing the URL changes the record key (it is legado's primary key), so the
+  /// old record is removed first to avoid leaving a duplicate behind.
+  /// 保存一条书源的编辑结果。
+  ///
+  /// `bookSourceUrl` 是书源的主键，用户可以改它。此时新记录以新 id 写入，旧 id
+  /// 的记录必须显式删掉，否则书源列表里会出现两条同名记录。
+  Future<void> updateSource(BookSource source, {String? previousId}) async {
+    final before = previousId ?? source.id;
+    await repository.replaceSource(source);
+    if (before != source.id) {
+      await repository.deleteSource(before);
+    }
+    _sources = await repository.sources();
+    _notify();
+  }
+
+  Future<void> moveSourceToTop(String id) async {
+    final moved = await repository.moveSourceToTop(id);
+    if (moved == null) return;
+    _sources = await repository.sources();
+    _notify();
+  }
+
+  Future<void> moveSourceToBottom(String id) async {
+    final moved = await repository.moveSourceToBottom(id);
+    if (moved == null) return;
+    _sources = await repository.sources();
+    _notify();
+  }
+
+  /// Applies a source-level action from the 换源 candidate list.
+  ///
+  /// Legado's change-source sheet offers 置顶/置底/停用/删除 per candidate
+  /// (`ChangeBookSourceComposeViewModel`), because a bad source is usually
+  /// discovered while hunting for a replacement. Returns whether the source is
+  /// still installed afterwards, so callers can drop the row.
+  Future<bool> applyCandidateSourceAction(
+    String sourceId,
+    CandidateSourceAction action,
+  ) async {
+    switch (action) {
+      case CandidateSourceAction.top:
+        await moveSourceToTop(sourceId);
+        return true;
+      case CandidateSourceAction.bottom:
+        await moveSourceToBottom(sourceId);
+        return true;
+      case CandidateSourceAction.disable:
+        final source = _sources
+            .where((item) => item.id == sourceId)
+            .firstOrNull;
+        if (source == null) return false;
+        await setSourceEnabled(source, false);
+        return true;
+      case CandidateSourceAction.delete:
+        await deleteSource(sourceId);
+        return false;
+    }
+  }
+
+  Future<void> deleteSources(Iterable<String> ids) async {
+    final removing = ids.toSet();
+    if (removing.isEmpty) return;
+    for (final id in removing) {
+      await repository.deleteSource(id);
+    }
+    _sources = _sources
+        .where((source) => !removing.contains(source.id))
+        .toList();
+    _notify();
+  }
+
+  /// The JSON array legado's source manager exports, so a user's library can
+  /// leave this app in a format every 阅读 client accepts.
+  String exportSourcesJson() => const JsonEncoder.withIndent(
+    '  ',
+  ).convert([for (final source in _sources) source.toJson()]);
 
   Future<SourceSearchGroup> _search(
     BookSource source,
@@ -1322,6 +1595,22 @@ class AppController extends ChangeNotifier {
   Future<void> updateSettings(ReaderSettings settings) async {
     await repository.saveSettings(settings);
     _settings = settings;
+    _notify();
+  }
+
+  Future<void> updateChangeSourceSettings(ChangeSourceSettings settings) async {
+    await repository.saveChangeSourceSettings(settings);
+    _changeSourceSettings = settings;
+    _notify();
+  }
+
+  /// What a source health check is allowed to probe.
+  SourceCheckSettings get sourceCheckSettings => _sourceCheckSettings;
+
+  Future<void> updateSourceCheckSettings(SourceCheckSettings settings) async {
+    if (!settings.isUsable) throw const FormatException('至少需要开启搜索或发现检查。');
+    await repository.saveSourceCheckSettings(settings);
+    _sourceCheckSettings = settings;
     _notify();
   }
 
@@ -1509,7 +1798,38 @@ class SourceCandidateSearchResult {
 
   SourceCandidateInfo? infoFor(Book candidate) =>
       candidateInfoById[candidate.id];
+
+  /// Drops every candidate that came from [sourceId].
+  ///
+  /// Deleting or disabling a source from the 换源 list must remove its row at
+  /// once; leaving it visible would offer a source that no longer exists.
+  SourceCandidateSearchResult withoutSource(String sourceId) {
+    final kept = [
+      for (final candidate in candidates)
+        if (candidate.sourceId != sourceId) candidate,
+    ];
+    if (kept.length == candidates.length) return this;
+    return SourceCandidateSearchResult(
+      kept,
+      failedSources: failedSources,
+      unavailableCandidateSourceIds: unavailableCandidateSourceIds,
+      candidateInfoById: {
+        for (final candidate in kept)
+          candidate.id: ?candidateInfoById[candidate.id],
+      },
+      pendingMetadata: pendingMetadata,
+      fromCache: fromCache,
+      loadedAt: loadedAt,
+    );
+  }
 }
+
+/// Per-candidate source actions offered in the 换源 sheet.
+///
+/// Legado exposes the same four actions on each change-source candidate
+/// (`ChangeBookSourceComposeViewModel`): promote, demote, disable and delete a
+/// source without leaving the sheet.
+enum CandidateSourceAction { top, bottom, disable, delete }
 
 class SourceSearchGroup {
   const SourceSearchGroup(this.source, this.books, {this.error});
