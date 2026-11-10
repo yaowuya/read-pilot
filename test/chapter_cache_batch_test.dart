@@ -155,8 +155,27 @@ void main() {
     },
   );
 
+  test('a batch can cover more than five chapters', () async {
+    final result = await controller.cacheChapterRange(
+      'cache-batch',
+      startIndex: 0,
+      count: 6,
+    );
+    expect(result.requested, 6);
+    expect(result.completed, 6);
+    expect(result.downloaded, 5);
+    expect(result.skippedCached, 1);
+    expect(engine.requests, [
+      'chapter-0',
+      'chapter-2',
+      'chapter-3',
+      'chapter-4',
+      'chapter-5',
+    ]);
+  });
+
   test('invalid ranges reject before starting any chapter request', () async {
-    for (final (start, count) in [(0, 0), (0, 6), (6, 2), (-1, 1)]) {
+    for (final (start, count) in [(0, 0), (0, 8), (6, 2), (-1, 1)]) {
       await expectLater(
         controller.cacheChapterRange(
           'cache-batch',

@@ -1,7 +1,7 @@
 name: read_pilot
 description: 阅读，一个离线优先的 Flutter 阅读应用。
 publish_to: none
-version: 0.1.0+1
+version: 0.1.1+1
 
 environment:
   sdk: '>=3.8.0 <4.0.0'
@@ -38,6 +38,7 @@ flutter:
   assets:
     - assets/books/
     - assets/branding/icon-master.png
+    - android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
     - assets/fonts/OFL.txt
   fonts:
     - family: NotoSansSC

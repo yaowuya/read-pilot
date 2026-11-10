@@ -25,6 +25,9 @@ class AppColors {
   /// Tinted blue used by selected chips and soft highlights.
   static const softBlue = Color(0xFFEDF4FF);
 
+  /// Soft panel behind the shelf continue-card and the profile stats card.
+  static const panel = Color(0xFFF5F7FA);
+
   /// Reader paper theme background.
   static const paper = Color(0xFFF6F3EC);
 
@@ -47,10 +50,11 @@ class AppRadii {
 }
 
 class AppSpacing {
-  /// Phone layouts use a 20 px gutter; the draft's 390 px frame uses ~24,
-  /// which reads almost identical at our density but leaves room for the
-  /// scrollbar-less `ListView` padding used across the app.
-  static const page = 20.0;
+  /// Phone layouts use the draft `.pad` gutter of 25.
+  ///
+  /// Wide layouts keep a larger gutter so the existing sidebar shell does not
+  /// stretch the 390-wide phone frame across the desktop.
+  static const page = 25.0;
   static const pageWide = 40.0;
 }
 

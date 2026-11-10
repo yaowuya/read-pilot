@@ -67,10 +67,11 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Size get preferredSize =>
-      Size.fromHeight(52 + (bottom?.preferredSize.height ?? 0));
+      Size.fromHeight(55 + (bottom?.preferredSize.height ?? 0));
 
   @override
   Widget build(BuildContext context) => AppBar(
+    toolbarHeight: 55,
     automaticallyImplyLeading: false,
     leading: onBack == null
         ? const SizedBox.shrink()
@@ -99,16 +100,16 @@ class SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(4, 22, 4, 10),
+    padding: const EdgeInsets.fromLTRB(0, 26, 0, 9),
     child: Row(
       children: [
         Expanded(
           child: Text(
             text,
             style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColors.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w400,
+              color: Color(0xFFA1A8B2),
             ),
           ),
         ),
@@ -157,7 +158,7 @@ class ListRow extends StatelessWidget {
     this.trailingText,
     this.trailing,
     this.onTap,
-    this.iconColor = AppColors.ink,
+    this.iconColor = const Color(0xFF747E8B),
     this.showChevron = true,
   });
 
@@ -173,14 +174,15 @@ class ListRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chrome = ChromeColors.maybeOf(context);
-    final ink = chrome?.ink ?? iconColor;
-    final muted = chrome?.muted ?? AppColors.muted;
+    final ink = chrome?.ink ?? AppColors.ink;
+    final muted = chrome?.muted ?? const Color(0xFF9AA2AF);
+    final glyph = chrome?.muted ?? iconColor;
     final content = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      padding: const EdgeInsets.symmetric(vertical: 15),
       child: Row(
         children: [
-          Icon(icon, size: 20, color: ink),
-          const SizedBox(width: 12),
+          Icon(icon, size: 20, color: glyph),
+          const SizedBox(width: 13),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -188,20 +190,16 @@ class ListRow extends StatelessWidget {
                 Text(
                   title,
                   style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w400,
                     color: ink,
                   ),
                 ),
                 if (subtitle != null) ...[
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 5),
                   Text(
                     subtitle!,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.4,
-                      color: muted,
-                    ),
+                    style: TextStyle(fontSize: 11, height: 1.7, color: muted),
                   ),
                 ],
               ],
@@ -212,14 +210,17 @@ class ListRow extends StatelessWidget {
               padding: const EdgeInsets.only(left: 8),
               child: Text(
                 trailingText!,
-                style: TextStyle(fontSize: 12.5, color: muted),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: chrome?.muted ?? const Color(0xFFA0A8B3),
+                ),
               ),
             ),
           if (trailing != null) ...[const SizedBox(width: 8), trailing!],
           if (onTap != null && showChevron)
             Padding(
               padding: const EdgeInsets.only(left: 6),
-              child: Icon(DesignIcons.chevronRight, size: 18, color: muted),
+              child: Icon(DesignIcons.chevronRight, size: 16, color: muted),
             ),
         ],
       ),
@@ -229,7 +230,8 @@ class ListRow extends StatelessWidget {
   }
 }
 
-/// White rounded container that groups rows, with hairline separators.
+/// Flat row group matching the draft `.list-row`: transparent, full-width
+/// hairline under every row except the last.
 class RowCard extends StatelessWidget {
   const RowCard({super.key, required this.children, this.padding});
 
@@ -237,27 +239,27 @@ class RowCard extends StatelessWidget {
   final EdgeInsets? padding;
 
   @override
-  Widget build(BuildContext context) => Container(
-    clipBehavior: Clip.antiAlias,
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(AppRadii.card),
-    ),
-    padding: padding,
+  Widget build(BuildContext context) => Padding(
+    padding: padding ?? EdgeInsets.zero,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (var index = 0; index < children.length; index++) ...[
-          if (index > 0) const Divider(height: 1, indent: 46, endIndent: 14),
-          children[index],
-        ],
+        for (var index = 0; index < children.length; index++)
+          DecoratedBox(
+            decoration: BoxDecoration(
+              border: index == children.length - 1
+                  ? null
+                  : const Border(bottom: BorderSide(color: Color(0xFFF0F1F4))),
+            ),
+            child: children[index],
+          ),
       ],
     ),
   );
 }
 
-/// Round icon button matching the draft's `.icon-btn`: 44 px target, 22 px
-/// glyph, hairline border, optional tinted selected state.
+/// Icon button matching the draft's `.icon-btn`: 44 px target, bare glyph,
+/// gray wash only while pressed. Selected state keeps the soft blue fill.
 class CircleIconButton extends StatelessWidget {
   const CircleIconButton({
     super.key,
@@ -265,7 +267,7 @@ class CircleIconButton extends StatelessWidget {
     required this.onPressed,
     required this.tooltip,
     this.selected = false,
-    this.size = 40,
+    this.size = 44,
   });
 
   final IconData icon;
@@ -277,13 +279,11 @@ class CircleIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chrome = ChromeColors.maybeOf(context);
-    final fill = selected
-        ? AppColors.softBlue
-        : (chrome?.surface ?? Colors.white);
+    final fill = selected ? AppColors.softBlue : Colors.transparent;
     final glyph = selected ? AppColors.blue : (chrome?.ink ?? AppColors.ink);
-    final border = selected
-        ? AppColors.softBlue
-        : (chrome?.ink.withValues(alpha: .16) ?? AppColors.line);
+    final wash = chrome == null
+        ? const Color(0xFFEFF1F5)
+        : chrome.ink.withValues(alpha: .12);
     return Tooltip(
       message: tooltip,
       child: Semantics(
@@ -291,10 +291,14 @@ class CircleIconButton extends StatelessWidget {
         label: tooltip,
         child: Material(
           color: fill,
-          shape: CircleBorder(side: BorderSide(color: border)),
+          shape: const CircleBorder(),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             onTap: onPressed,
+            customBorder: const CircleBorder(),
+            hoverColor: wash,
+            highlightColor: wash,
+            splashColor: wash,
             child: SizedBox(
               width: size,
               height: size,
@@ -338,15 +342,14 @@ class SearchPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     height: 42,
     decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(AppRadii.pill),
-      border: Border.all(color: AppColors.line),
+      color: const Color(0xFFF4F5F7),
+      borderRadius: BorderRadius.circular(11),
     ),
     child: Row(
       children: [
-        const SizedBox(width: 14),
-        const Icon(DesignIcons.search, size: 18, color: AppColors.muted),
-        const SizedBox(width: 8),
+        const SizedBox(width: 13),
+        const Icon(DesignIcons.search, size: 18, color: Color(0xFFA0A6B0)),
+        const SizedBox(width: 9),
         Expanded(
           child: TextField(
             key: fieldKey,

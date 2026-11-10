@@ -28,7 +28,7 @@ class _ReaderCacheSheetState extends State<ReaderCacheSheet> {
     0,
     math.max(0, widget.book.chapters.length - 1),
   );
-  late int _count = math.min(5, widget.book.chapters.length - _startIndex);
+  late int _count = math.min(10, _remaining);
   Completer<void>? _abort;
   ChapterCacheBatchResult? _result;
   String? _error;
@@ -41,6 +41,23 @@ class _ReaderCacheSheetState extends State<ReaderCacheSheet> {
     if (!(_abort?.isCompleted ?? true)) _abort!.complete();
     super.dispose();
   }
+
+  int get _remaining => math.max(0, widget.book.chapters.length - _startIndex);
+
+  /// 10、20、50，以及从当前位置到目录末尾的全部章节。
+  /// 剩余章数少于某个档位时不显示该档；剩余数正好等于档位时只保留一档。
+  List<int> get _choices {
+    final remaining = _remaining;
+    if (remaining < 1) return const [];
+    return [
+      if (remaining >= 10) 10,
+      if (remaining >= 20) 20,
+      if (remaining >= 50) 50,
+      if (remaining != 10 && remaining != 20 && remaining != 50) remaining,
+    ];
+  }
+
+  String _choiceLabel(int count) => count == _remaining ? '全部章节' : '$count 章';
 
   bool _matchesBinding(Book? current) {
     if (current == null ||
@@ -108,7 +125,7 @@ class _ReaderCacheSheetState extends State<ReaderCacheSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final maxCount = math.min(5, widget.book.chapters.length - _startIndex);
+    final choices = _choices;
     return SafeArea(
       top: false,
       child: Padding(
@@ -129,9 +146,9 @@ class _ReaderCacheSheetState extends State<ReaderCacheSheet> {
               children: [
                 Text('缓存章节', style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 12),
-                Text(
-                  '从当前位置起最多缓存 $maxCount 章；已缓存的章节会跳过。',
-                  style: const TextStyle(color: AppColors.muted),
+                const Text(
+                  '从当前位置起缓存 10、20、50 或全部剩余章节；已缓存的会跳过。',
+                  style: TextStyle(color: AppColors.muted),
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -145,12 +162,12 @@ class _ReaderCacheSheetState extends State<ReaderCacheSheet> {
                     const SizedBox(width: 12),
                     DropdownButton<int>(
                       key: const Key('reader-cache-count'),
-                      value: _count > 0 ? _count : null,
+                      value: choices.contains(_count) ? _count : null,
                       items: [
-                        for (var value = 1; value <= maxCount; value++)
+                        for (final value in choices)
                           DropdownMenuItem(
                             value: value,
-                            child: Text('$value 章'),
+                            child: Text(_choiceLabel(value)),
                           ),
                       ],
                       onChanged: _running

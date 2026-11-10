@@ -329,9 +329,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     final groups = widget.controller.sourceGroups;
     return ListView(
       padding: EdgeInsets.fromLTRB(
-        compact ? 16 : 32,
-        compact ? 10 : 24,
-        compact ? 16 : 32,
+        compact ? AppSpacing.page : 32,
+        compact ? 12 : 24,
+        compact ? 19 : 32,
         compact ? 22 : 28,
       ),
       children: [
@@ -411,17 +411,17 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 )
         else ...[
           Column(
-              children: [
-                for (final source in sources)
-                  _DiscoverSourceRow(
-                    key: ValueKey('discover-source-${source.id}'),
-                    source: source,
-                    description: _rowDescription(source),
-                    browseable: _browseable(source),
-                    onTap: () => _openSource(source),
-                  ),
-              ],
-            ),
+            children: [
+              for (final source in sources)
+                _DiscoverSourceRow(
+                  key: ValueKey('discover-source-${source.id}'),
+                  source: source,
+                  description: _rowDescription(source),
+                  browseable: _browseable(source),
+                  onTap: () => _openSource(source),
+                ),
+            ],
+          ),
           const SizedBox(height: 4),
           TextButton(
             key: const Key('discover-add-source'),
@@ -491,33 +491,58 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     ],
   );
 
-  Widget _buildSearchRow() => Row(
-    children: [
-      Expanded(
-        child: SearchPill(
-          hintText: '搜索书名、作者',
-          controller: _searchQuery,
-          fieldKey: const Key('discover-search-field'),
-          onSubmitted: (_) => unawaited(_openSearch()),
-        ),
-      ),
-      const SizedBox(width: 10),
-      SizedBox(
-        height: 42,
-        child: FilledButton(
-          key: const Key('discover-search-submit'),
-          onPressed: () => unawaited(_openSearch()),
-          style: FilledButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            textStyle: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
+  Widget _buildSearchRow() => Container(
+    height: 52,
+    decoration: BoxDecoration(
+      color: const Color(0xFFF5F6F8),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    padding: const EdgeInsets.only(left: 14),
+    child: Row(
+      children: [
+        const Icon(DesignIcons.search, size: 19, color: Color(0xFF949AA5)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: TextField(
+            key: const Key('discover-search-field'),
+            controller: _searchQuery,
+            onSubmitted: (_) => unawaited(_openSearch()),
+            textAlignVertical: TextAlignVertical.center,
+            style: const TextStyle(fontSize: 14, color: Color(0xFF2B2E35)),
+            cursorColor: AppColors.blue,
+            decoration: const InputDecoration(
+              isDense: true,
+              filled: false,
+              contentPadding: EdgeInsets.zero,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              hintText: '搜索书名、作者',
+              hintStyle: TextStyle(fontSize: 14, color: Color(0xFF9DA3AD)),
             ),
           ),
-          child: const Text('搜索'),
         ),
-      ),
-    ],
+        DecoratedBox(
+          decoration: const BoxDecoration(
+            border: Border(left: BorderSide(color: Color(0xFFE5E8ED))),
+          ),
+          child: TextButton(
+            key: const Key('discover-search-submit'),
+            onPressed: () => unawaited(_openSearch()),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.blue,
+              minimumSize: const Size(37, 40),
+              padding: const EdgeInsets.only(left: 10, right: 14),
+              textStyle: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            child: const Text('搜索'),
+          ),
+        ),
+      ],
+    ),
   );
 
   Widget _buildHistoryChips() => Wrap(
@@ -605,9 +630,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       children: [
         Padding(
           padding: EdgeInsets.fromLTRB(
-            compact ? 16 : 32,
+            compact ? AppSpacing.page : 32,
             compact ? 10 : 24,
-            compact ? 16 : 32,
+            compact ? AppSpacing.page : 32,
             0,
           ),
           child: Row(
@@ -649,9 +674,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         Expanded(
           child: ListView(
             padding: EdgeInsets.fromLTRB(
-              compact ? 16 : 32,
+              compact ? AppSpacing.page : 32,
               18,
-              compact ? 16 : 32,
+              compact ? AppSpacing.page : 32,
               28,
             ),
             children: [
@@ -711,9 +736,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(
-              compact ? 16 : 32,
+              compact ? AppSpacing.page : 32,
               compact ? 10 : 24,
-              compact ? 16 : 32,
+              compact ? AppSpacing.page : 32,
               0,
             ),
             child: _buildTitleRow(),
@@ -727,18 +752,18 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       children: [
         Padding(
           padding: EdgeInsets.fromLTRB(
-            compact ? 16 : 32,
+            compact ? AppSpacing.page : 32,
             compact ? 10 : 24,
-            compact ? 16 : 32,
+            compact ? AppSpacing.page : 32,
             0,
           ),
           child: _buildTitleRow(),
         ),
         Padding(
           padding: EdgeInsets.fromLTRB(
-            compact ? 16 : 32,
+            compact ? AppSpacing.page : 32,
             14,
-            compact ? 16 : 32,
+            compact ? AppSpacing.page : 32,
             8,
           ),
           child: Row(
@@ -807,7 +832,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             height: 42,
             child: ListView(
               scrollDirection: Axis.horizontal,
-              padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 32),
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? AppSpacing.page : 32,
+              ),
               children: [
                 for (final kind in kinds)
                   Padding(
@@ -828,7 +855,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         Expanded(
           child: kinds.isEmpty
               ? ListView(
-                  padding: EdgeInsets.all(compact ? 16 : 32),
+                  padding: EdgeInsets.all(compact ? AppSpacing.page : 32),
                   children: const [
                     EmptyState(
                       title: '这条书源没有可浏览的分类',
@@ -849,7 +876,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     ExploreKind kind,
     bool compact,
   ) => ListView(
-    padding: EdgeInsets.fromLTRB(compact ? 16 : 32, 8, compact ? 16 : 32, 28),
+    padding: EdgeInsets.fromLTRB(
+      compact ? AppSpacing.page : 32,
+      8,
+      compact ? AppSpacing.page : 32,
+      28,
+    ),
     children: [
       SizedBox(
         width: double.infinity,
@@ -871,9 +903,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     children: [
       Padding(
         padding: EdgeInsets.fromLTRB(
-          compact ? 16 : 32,
+          compact ? AppSpacing.page : 32,
           compact ? 10 : 24,
-          compact ? 16 : 32,
+          compact ? AppSpacing.page : 32,
           0,
         ),
         child: Row(
@@ -923,7 +955,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   Widget _buildPage(_ExplorePage page, bool compact) {
     final books = page.books;
     return ListView(
-      padding: EdgeInsets.fromLTRB(compact ? 16 : 32, 8, compact ? 16 : 32, 28),
+      padding: EdgeInsets.fromLTRB(
+        compact ? AppSpacing.page : 32,
+        8,
+        compact ? AppSpacing.page : 32,
+        28,
+      ),
       children: [
         if (page.loading && books.isEmpty)
           const Padding(

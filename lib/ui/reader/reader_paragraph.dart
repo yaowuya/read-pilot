@@ -24,9 +24,7 @@ class ReaderParagraph extends StatelessWidget {
   final TextStyle style;
   final bool isContinuation;
 
-  /// 首行缩进开关。null 时由 [isContinuation] 推导：续段不缩进。
-  ///
-  /// 章节正文的第一段按设计稿不缩进，它并不是续段，所以需要单独覆盖。
+  /// 首行缩进开关。null 时由 [isContinuation] 推导：完整段落缩进两字，续段不缩进。
   final bool? indent;
   final bool selectable;
   final List<ReaderTextHighlight> highlights;

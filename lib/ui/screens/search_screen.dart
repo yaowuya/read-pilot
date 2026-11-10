@@ -281,6 +281,7 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppTopBar(
         onBack: () => Navigator.of(context).maybePop(),
         title: '搜索',
@@ -297,7 +298,12 @@ class _SearchScreenState extends State<SearchScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(23, 8, 23, 0),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.page,
+              8,
+              AppSpacing.page,
+              0,
+            ),
             child: Row(
               children: [
                 Expanded(
@@ -355,7 +361,7 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget _conditions() => Container(
     height: 58,
     margin: const EdgeInsets.only(top: 4),
-    padding: const EdgeInsets.symmetric(horizontal: 23),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.page),
     decoration: const BoxDecoration(
       border: Border(bottom: BorderSide(color: AppColors.line)),
     ),
@@ -419,7 +425,11 @@ class _SearchScreenState extends State<SearchScreen> {
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: _exact
-                      ? const Icon(DesignIcons.check, size: 11, color: Colors.white)
+                      ? const Icon(
+                          DesignIcons.check,
+                          size: 11,
+                          color: Colors.white,
+                        )
                       : null,
                 ),
                 const SizedBox(width: 6),
@@ -447,7 +457,12 @@ class _SearchScreenState extends State<SearchScreen> {
     final local = showLocal ? _localMatches : const <Book>[];
     final count = showLocal ? local.length : results.length;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(23, 0, 23, 22),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.page,
+        0,
+        AppSpacing.page,
+        22,
+      ),
       children: [
         _resultsHead(count, searchingSources),
         if (_searching)
@@ -694,7 +709,12 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget _idleView() {
     final sources = _scopedSources;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(23, 0, 23, 22),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.page,
+        0,
+        AppSpacing.page,
+        22,
+      ),
       children: [
         const SizedBox(height: 23),
         Row(
@@ -744,7 +764,11 @@ class _SearchScreenState extends State<SearchScreen> {
                 color: _idleIconFill,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(DesignIcons.search, size: 22, color: _idleIconInk),
+              child: const Icon(
+                DesignIcons.search,
+                size: 22,
+                color: _idleIconInk,
+              ),
             ),
             const SizedBox(height: 18),
             const Text(
@@ -787,7 +811,11 @@ class _SearchScreenState extends State<SearchScreen> {
               padding: const EdgeInsets.symmetric(vertical: 14),
               child: Row(
                 children: [
-                  const Icon(DesignIcons.rotateCcw, size: 16, color: Color(0xFFB2BBC7)),
+                  const Icon(
+                    DesignIcons.rotateCcw,
+                    size: 16,
+                    color: Color(0xFFB2BBC7),
+                  ),
                   const SizedBox(width: 13),
                   Expanded(
                     child: Text(
@@ -937,7 +965,9 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 23),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.page,
+                      ),
                       child: Column(
                         children: [
                           Container(
@@ -1411,7 +1441,11 @@ class _LocalRow extends StatelessWidget {
               ],
             ),
           ),
-          const Icon(DesignIcons.chevronRight, size: 15, color: Color(0xFFB4BDC8)),
+          const Icon(
+            DesignIcons.chevronRight,
+            size: 15,
+            color: Color(0xFFB4BDC8),
+          ),
         ],
       ),
     ),

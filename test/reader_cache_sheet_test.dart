@@ -9,7 +9,11 @@ import 'package:read_pilot/services/source_engine.dart';
 import 'package:read_pilot/ui/components/reader_cache_sheet.dart';
 import 'package:sembast/sembast_memory.dart';
 
-Book _book({String sourceId = 'https://old.example'}) => Book(
+Book _book({
+  String sourceId = 'https://old.example',
+  int chapters = 7,
+  int chapterIndex = 2,
+}) => Book(
   id: 'book',
   title: '测试书',
   author: '作者',
@@ -19,10 +23,10 @@ Book _book({String sourceId = 'https://old.example'}) => Book(
   sourceLabel: '已授权书源',
   sourceId: sourceId,
   url: '$sourceId/book',
-  position: const ReadingPosition(chapterIndex: 2),
+  position: ReadingPosition(chapterIndex: chapterIndex),
   addedAt: DateTime.utc(2026),
   chapters: [
-    for (var index = 0; index < 7; index++)
+    for (var index = 0; index < chapters; index++)
       Chapter(id: 'chapter-$index', title: '第${index + 1}章'),
   ],
 );
@@ -117,7 +121,7 @@ void main() {
   ) async {
     controller.pending = Completer<ChapterCacheBatchResult>();
     await openSheet(tester);
-    expect(find.textContaining('最多缓存 5 章'), findsOneWidget);
+    expect(find.text('全部章节'), findsOneWidget);
     expect(
       tester
           .widget<DropdownButton<int>>(
@@ -149,6 +153,45 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.textContaining('已停止'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('default batch is 10 chapters, with 20, 50, and the rest', (
+    tester,
+  ) async {
+    initial = _book(chapters: 80, chapterIndex: 0);
+    controller.current = initial;
+    await openSheet(tester);
+    expect(
+      tester
+          .widget<DropdownButton<int>>(
+            find.byKey(const Key('reader-cache-count')),
+          )
+          .value,
+      10,
+    );
+    expect(find.text('第1章 — 第10章'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('reader-cache-count')));
+    await tester.pumpAndSettle();
+    expect(find.text('20 章'), findsOneWidget);
+    expect(find.text('50 章'), findsOneWidget);
+    expect(find.text('全部章节'), findsOneWidget);
+
+    await tester.tap(find.text('50 章').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-cache-confirm')));
+    await tester.pumpAndSettle();
+    expect(controller.startIndex, 0);
+    expect(controller.count, 50);
+
+    await tester.tap(find.byKey(const Key('reader-cache-count')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('全部章节').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-cache-confirm')));
+    await tester.pumpAndSettle();
+    expect(controller.count, 80);
     expect(tester.takeException(), isNull);
   });
 
