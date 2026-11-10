@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:read_pilot/app.dart';
+import 'package:read_pilot/ui/components/book_cover.dart';
 import 'package:read_pilot/application/app_controller.dart';
 import 'package:read_pilot/data/app_repository.dart';
 import 'package:read_pilot/domain/book.dart';
@@ -81,6 +82,33 @@ void main() {
     await tester.tap(find.byKey(const Key('shelf-scope-back')));
     await tester.pumpAndSettle();
     expect(find.byKey(Key('shelf-group-${group.id}')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a two-book group shows both covers', (tester) async {
+    await tester.runAsync(() async {
+      final group = await controller.createShelfGroup('测试');
+      await controller.setShelfGroupMembership(
+        group.id,
+        'public-fusheng',
+        true,
+      );
+      await controller.setShelfGroupMembership(
+        group.id,
+        'public-zhaohua',
+        true,
+      );
+    });
+    await pumpShelf(tester);
+    final group = controller.shelfGroups.single;
+    expect(
+      find.descendant(
+        of: find.byKey(Key('shelf-group-${group.id}')),
+        matching: find.byType(BookCover),
+      ),
+      findsNWidgets(2),
+    );
+    expect(find.text('2 本'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

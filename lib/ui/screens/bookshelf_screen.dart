@@ -272,7 +272,11 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
               key: Key('shelf-status-${status.name}'),
               title: Text(status.label),
               trailing: status == _status
-                  ? const Icon(DesignIcons.check, size: 20, color: AppColors.blue)
+                  ? const Icon(
+                      DesignIcons.check,
+                      size: 20,
+                      color: AppColors.blue,
+                    )
                   : null,
               onTap: () {
                 Navigator.pop(sheetContext);
@@ -321,7 +325,7 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 650;
-      final padding = compact ? 20.0 : 40.0;
+      final padding = compact ? AppSpacing.page : AppSpacing.pageWide;
       final groups = widget.controller.shelfGroups;
       final selectedGroup = groups
           .where((group) => group.id == _selectedGroupId)
@@ -353,7 +357,7 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
       final addCard = !_selecting && _status == _ShelfStatus.all;
       final recent = widget.controller.recentBook;
       final columns = compact ? 3 : (constraints.maxWidth < 950 ? 3 : 4);
-      final gridSpacing = compact ? 18.0 : 28.0;
+      final gridSpacing = compact ? 22.0 : 28.0;
       final coverWidth = math.min(
         (constraints.maxWidth - padding * 2 - (columns - 1) * gridSpacing) /
             columns,
@@ -376,8 +380,8 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                 SliverPadding(
                   padding: EdgeInsets.fromLTRB(
                     padding,
-                    compact ? 14 : 26,
-                    padding,
+                    compact ? 12 : 26,
+                    compact ? 19 : padding,
                     0,
                   ),
                   sliver: SliverList.list(
@@ -408,7 +412,7 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                           compact: compact,
                           onOpen: () => widget.onOpen(recent),
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 23),
                       ],
                     ],
                   ),
@@ -428,7 +432,9 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                       ),
                     ),
                   )
-                else if (visibleBooks.isEmpty && !showFolders && !addCard)
+                else if (visibleBooks.isEmpty &&
+                    !showFolders &&
+                    (!addCard || inGroup))
                   SliverPadding(
                     padding: EdgeInsets.all(padding),
                     sliver: SliverToBoxAdapter(
@@ -549,19 +555,24 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
     required List<Book> allBooks,
   }) {
     if (groups.isEmpty) return books;
-    final tiles = <({DateTime readAt, DateTime tie, Object item})>[
-      for (final group in groups)
-        (
-          readAt: _latestOpened(group, allBooks),
-          tie: group.createdAt,
-          item: group,
-        ),
-      for (final book in books)
-        (readAt: book.lastOpenedAt ?? _epoch, tie: book.addedAt, item: book),
-    ]..sort((a, b) {
-      final byRead = b.readAt.compareTo(a.readAt);
-      return byRead != 0 ? byRead : b.tie.compareTo(a.tie);
-    });
+    final tiles =
+        <({DateTime readAt, DateTime tie, Object item})>[
+          for (final group in groups)
+            (
+              readAt: _latestOpened(group, allBooks),
+              tie: group.createdAt,
+              item: group,
+            ),
+          for (final book in books)
+            (
+              readAt: book.lastOpenedAt ?? _epoch,
+              tie: book.addedAt,
+              item: book,
+            ),
+        ]..sort((a, b) {
+          final byRead = b.readAt.compareTo(a.readAt);
+          return byRead != 0 ? byRead : b.tie.compareTo(a.tie);
+        });
     return [for (final tile in tiles) tile.item];
   }
 
@@ -576,11 +587,7 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
     required int columns,
     required double gridSpacing,
   }) {
-    final tiles = _shelfTiles(
-      groups: groups,
-      books: books,
-      allBooks: allBooks,
-    );
+    final tiles = _shelfTiles(groups: groups, books: books, allBooks: allBooks);
     final itemCount = tiles.length + (withAddCard ? 1 : 0);
     return SliverPadding(
       padding: EdgeInsets.symmetric(horizontal: padding),
@@ -588,8 +595,8 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: columns,
           crossAxisSpacing: gridSpacing,
-          mainAxisSpacing: 24,
-          mainAxisExtent: coverWidth * 1.4 + 102,
+          mainAxisSpacing: 25,
+          mainAxisExtent: coverWidth * 1.4 + 72,
         ),
         itemCount: itemCount,
         itemBuilder: (context, index) {
@@ -695,7 +702,11 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
                 ),
               ),
               const SizedBox(width: 2),
-              const Icon(DesignIcons.chevronDown, size: 17, color: AppColors.muted),
+              const Icon(
+                DesignIcons.chevronDown,
+                size: 17,
+                color: AppColors.muted,
+              ),
             ],
           ),
         ),
@@ -897,38 +908,32 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 11),
         Text(
           book.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
             color: AppColors.ink,
           ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          book.author,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12, color: AppColors.muted),
-        ),
-        if (_selecting)
-          const SizedBox(height: 2)
-        else
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  book.progressLabel,
-                  style: const TextStyle(fontSize: 11, color: AppColors.muted),
-                ),
+        const SizedBox(height: 5),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                book.progressLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 10, color: Color(0xFFA2A6AF)),
               ),
-              SizedBox(width: 32, height: 32, child: _menu(book)),
-            ],
-          ),
+            ),
+            if (!_selecting)
+              SizedBox(width: 28, height: 28, child: _menu(book)),
+          ],
+        ),
       ],
     );
   }
@@ -936,7 +941,7 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
   Widget _menu(Book book) => PopupMenuButton<String>(
     tooltip: '${book.title}的更多操作',
     padding: EdgeInsets.zero,
-    iconSize: 19,
+    iconSize: 16,
     itemBuilder: (_) => [
       const PopupMenuItem(value: 'details', child: Text('书籍信息')),
       const PopupMenuItem(value: 'groups', child: Text('加入分组')),
@@ -1010,36 +1015,29 @@ class _AddBookCard extends StatelessWidget {
           height: width * 1.4,
           child: CustomPaint(
             painter: _DashedBorderPainter(color: AppColors.line),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(DesignIcons.plus, size: 30, color: Color(0xFFB6BCC7)),
-                  const SizedBox(height: 6),
-                  Text(
-                    '添加书籍',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.muted,
-                    ),
-                  ),
-                ],
-              ),
+            child: const Center(
+              child: Icon(DesignIcons.plus, size: 28, color: Color(0xFFB6BCC7)),
             ),
           ),
         ),
       ),
-      const SizedBox(height: 12),
+      const SizedBox(height: 11),
+      const Text(
+        '添加书籍',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+          color: AppColors.ink,
+        ),
+      ),
+      const SizedBox(height: 5),
       Text(
         label,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: AppColors.muted,
-        ),
+        style: const TextStyle(fontSize: 10, color: Color(0xFFA2A6AF)),
       ),
     ],
   );
@@ -1223,11 +1221,9 @@ class _Collage extends StatelessWidget {
         ),
       );
     }
-    // One or two books keep a full cover. A left/right split makes each
-    // cover a narrow strip and reads as a broken layout.
-    if (books.length <= 2) return _slot(0);
-    // Two books split the card left/right; three or four use a 2x2 grid with
-    // the missing slot left blank.
+    // A single book fills the cover. Two books sit side by side, and three
+    // or four use a 2×2 grid with the empty slot left blank.
+    if (books.length <= 1) return _slot(0);
     final rows = books.length == 2 ? 1 : 2;
     return Column(
       children: [
@@ -1279,51 +1275,54 @@ class _ContinueReading extends StatelessWidget {
   final bool compact;
   final VoidCallback onOpen;
   @override
-  Widget build(BuildContext context) => QuietPanel(
-    padding: EdgeInsets.all(compact ? 16 : 24),
+  Widget build(BuildContext context) => Container(
+    padding: EdgeInsets.symmetric(
+      horizontal: compact ? 15 : 24,
+      vertical: compact ? 16 : 24,
+    ),
+    decoration: BoxDecoration(
+      color: AppColors.panel,
+      borderRadius: BorderRadius.circular(compact ? 13 : 16),
+    ),
     child: Row(
       children: [
         BookCover(
           book: book,
           imageLoader: controller.loadBookCover,
           onMissingCover: controller.ensureBookCover,
-          width: compact ? 62 : 84,
-          height: compact ? 88 : 118,
+          width: compact ? 47 : 64,
+          height: compact ? 68 : 92,
         ),
-        SizedBox(width: compact ? 16 : 24),
+        SizedBox(width: compact ? 14 : 20),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 book.hasStarted ? '接着上次，继续读' : '从这里，翻开新的一页',
-                style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                style: const TextStyle(
+                  color: Color(0xFF9A9FA9),
+                  fontSize: 10,
+                  letterSpacing: .5,
+                ),
               ),
               const SizedBox(height: 6),
               Text(
                 book.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                book.hasStarted
-                    ? '${book.author} · ${book.progressLabel}'
-                    : '${book.author} · 公版节选',
-                style: const TextStyle(fontSize: 12, color: AppColors.muted),
-              ),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: onOpen,
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size(0, 38),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 9,
-                  ),
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.ink,
                 ),
-                child: Text(book.hasStarted ? '继续阅读  →' : '开始阅读  →'),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _statusLine(book),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 10, color: Color(0xFF999FAA)),
               ),
             ],
           ),
@@ -1356,7 +1355,34 @@ class _ContinueReading extends StatelessWidget {
             ),
           ),
         ],
+        const SizedBox(width: 8),
+        Tooltip(
+          message: '继续阅读${book.title}',
+          child: Material(
+            color: Colors.white,
+            elevation: 1,
+            shadowColor: const Color(0x14203050),
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              key: const Key('shelf-continue'),
+              onTap: onOpen,
+              customBorder: const CircleBorder(),
+              child: const SizedBox(
+                width: 35,
+                height: 35,
+                child: Icon(DesignIcons.play, size: 17, color: AppColors.blue),
+              ),
+            ),
+          ),
+        ),
       ],
     ),
   );
+
+  static String _statusLine(Book book) {
+    if (!book.hasStarted || book.chapters.isEmpty) return book.progressLabel;
+    final index = book.position.chapterIndex.clamp(0, book.chapters.length - 1);
+    return '${book.chapters[index].title} · ${book.progressLabel}';
+  }
 }

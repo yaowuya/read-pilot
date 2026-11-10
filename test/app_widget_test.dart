@@ -104,9 +104,9 @@ void main() {
   testWidgets('new chapter keeps its heading visible', (tester) async {
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('开始阅读  →'));
+    await tester.tap(find.byKey(const Key('shelf-continue')));
     await tester.pumpAndSettle();
-    // 沉浸态仍保留紧凑页头，正文标题不能被它遮住。
+    // 沉浸态的紧凑页头高 36，正文标题从它下面开始，不能被挡住。
     final body =
         find.byKey(const Key('reader-paged-view')).evaluate().isNotEmpty
         ? find.byKey(const Key('reader-paged-view'))
@@ -118,7 +118,7 @@ void main() {
     expect(bodyHeading, findsOneWidget);
     expect(
       tester.getTopLeft(bodyHeading).dy,
-      greaterThanOrEqualTo(kToolbarHeight),
+      greaterThanOrEqualTo(36),
     );
     expect(controller.book('public-fusheng')!.position.paragraphIndex, 0);
   });
@@ -128,7 +128,7 @@ void main() {
   ) async {
     await tester.pumpWidget(ReadPilotApp(controller: controller));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('开始阅读  →'));
+    await tester.tap(find.byKey(const Key('shelf-continue')));
     await tester.pumpAndSettle();
     await showChrome(tester);
     await tester.tap(find.byKey(const Key('reader-settings')));

@@ -81,7 +81,7 @@ abstract final class DesignIcons {
 
   static const toolToc = LucideIcons.list;
   static const toolSource = LucideIcons.refreshCw;
-  static const toolNotes = LucideIcons.pencil;
+  static const toolNotes = LucideIcons.notebookPen;
   static const toolSettings = LucideIcons.type;
 
   static const selectionHighlight = LucideIcons.highlighter;

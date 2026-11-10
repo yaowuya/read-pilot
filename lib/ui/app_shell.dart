@@ -473,55 +473,62 @@ class _TabBar extends StatelessWidget {
     ),
     child: SafeArea(
       top: false,
-      child: SizedBox(
-        height: 56,
-        child: Row(
-          children: [
-            for (var index = 0; index < _AppShellState._labels.length; index++)
-              Expanded(
-                child: InkWell(
-                  key: Key('nav-$index'),
-                  onTap: () => onSelect(index),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        _AppShellState._icons[index],
-                        size: 23,
-                        color: selected == index
-                            ? AppColors.blue
-                            : const Color(0xFF999FA9),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _AppShellState._labels[index],
-                        style: TextStyle(
-                          fontSize: 10,
-                          height: 1.1,
-                          fontWeight: selected == index
-                              ? FontWeight.w600
-                              : FontWeight.w400,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+        child: SizedBox(
+          height: 48,
+          child: Row(
+            children: [
+              for (
+                var index = 0;
+                index < _AppShellState._labels.length;
+                index++
+              )
+                Expanded(
+                  child: InkWell(
+                    key: Key('nav-$index'),
+                    onTap: () => onSelect(index),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          _AppShellState._icons[index],
+                          size: 23,
                           color: selected == index
                               ? AppColors.blue
                               : const Color(0xFF999FA9),
                         ),
-                      ),
-                      const SizedBox(height: 3),
-                      Container(
-                        width: 4,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: selected == index
-                              ? AppColors.blue
-                              : Colors.transparent,
-                          shape: BoxShape.circle,
+                        const SizedBox(height: 4),
+                        Text(
+                          _AppShellState._labels[index],
+                          style: TextStyle(
+                            fontSize: 10,
+                            height: 1.1,
+                            fontWeight: selected == index
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                            color: selected == index
+                                ? AppColors.blue
+                                : const Color(0xFF999FA9),
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 3),
+                        Container(
+                          width: 4,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: selected == index
+                                ? AppColors.blue
+                                : Colors.transparent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     ),

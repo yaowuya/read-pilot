@@ -65,14 +65,14 @@ class ProfileScreen extends StatelessWidget {
         final compact = constraints.maxWidth < 650;
         return ListView(
           padding: EdgeInsets.fromLTRB(
-            compact ? 16 : 32,
-            12,
-            compact ? 16 : 32,
+            compact ? AppSpacing.page : AppSpacing.pageWide,
+            29,
+            compact ? AppSpacing.page : AppSpacing.pageWide,
             32,
           ),
           children: [
             _header(context),
-            const SizedBox(height: 20),
+            const SizedBox(height: 25),
             InkWell(
               key: const Key('profile-stats'),
               onTap: onHistory,
@@ -156,49 +156,42 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
-  Widget _header(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(4, 18, 0, 0),
-    child: Row(
-      children: [
-        Container(
+  Widget _header(BuildContext context) => Row(
+    children: [
+      ClipOval(
+        child: Image.asset(
+          'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png',
           width: 57,
           height: 57,
-          alignment: Alignment.center,
-          decoration: const BoxDecoration(
-            color: Color(0xFFEDF4FB),
-            shape: BoxShape.circle,
-          ),
-          child: const Text(
-            '阅',
-            style: TextStyle(fontSize: 23, color: Color(0xFF7E9ABB)),
-          ),
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.high,
         ),
-        const SizedBox(width: 16),
-        const Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '阅读者',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-              ),
-              SizedBox(height: 8),
-              Text(
-                '给生活留一页空白',
-                style: TextStyle(fontSize: 11, color: AppColors.muted),
-              ),
-            ],
-          ),
+      ),
+      const SizedBox(width: 16),
+      const Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '阅读者',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+            ),
+            SizedBox(height: 8),
+            Text(
+              '给生活留一页空白',
+              style: TextStyle(fontSize: 11, color: AppColors.muted),
+            ),
+          ],
         ),
-        IconButton(
-          key: const Key('profile-settings'),
-          tooltip: '设置',
-          onPressed: onSettings,
-          icon: const Icon(DesignIcons.settings, size: 21),
-          color: AppColors.muted,
-        ),
-      ],
-    ),
+      ),
+      IconButton(
+        key: const Key('profile-settings'),
+        tooltip: '设置',
+        onPressed: onSettings,
+        icon: const Icon(DesignIcons.settings, size: 21),
+        color: AppColors.muted,
+      ),
+    ],
   );
 
   Widget _statsCard(
@@ -208,9 +201,9 @@ class ProfileScreen extends StatelessWidget {
     required int finished,
     required int notes,
   }) => Container(
-    padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 23),
     decoration: BoxDecoration(
-      color: const Color(0xFFF5F7FA),
+      color: AppColors.panel,
       borderRadius: BorderRadius.circular(AppRadii.card),
     ),
     child: Column(

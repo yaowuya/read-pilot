@@ -601,7 +601,8 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// Caches at most five consecutive chapters on an unchanged remote binding.
+  /// Caches consecutive chapters from the current position on an unchanged
+  /// remote binding. The batch may cover the rest of the book.
   /// Stop requests only prevent queued chapters; an in-flight read is not cancelled.
   /// Successful chapters remain cached if another chapter fails or the user stops.
   Future<ChapterCacheBatchResult> cacheChapterRange(
@@ -615,8 +616,8 @@ class AppController extends ChangeNotifier {
     if (initial == null || !initial.isRemote) {
       throw const SourceException('只有书架中的网络书籍可以缓存章节。');
     }
-    if (count < 1 || count > 5) {
-      throw ArgumentError.value(count, 'count', 'must be between 1 and 5');
+    if (count < 1) {
+      throw ArgumentError.value(count, 'count', 'must be at least 1');
     }
     if (startIndex < 0 || startIndex + count > initial.chapters.length) {
       throw ArgumentError.value(

@@ -784,7 +784,6 @@ class _ReaderScreenState extends State<ReaderScreen>
                       _chapter!.paragraphs[index],
                       ReaderParagraph(
                         text: chapter.paragraphs[index],
-                        indent: index != 0,
                         selectable: !_hasActiveDisplayRules,
                         highlights: _hasActiveDisplayRules
                             ? const []
